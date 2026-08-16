@@ -18,6 +18,8 @@ export default function Archive({ session }) {
   const [managerOpen, setManagerOpen] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [importStep, setImportStep] = useState(null) // null | 1 | 2 | 3
+  const fileRef = useRef(null)
 
   const [search, setSearch] = useState('')
   const [debounced, setDebounced] = useState('')
@@ -254,6 +256,81 @@ export default function Archive({ session }) {
     }
   }
 
+  // 1000개씩 나눠 upsert. 한 덩어리라도 실패하면 그 자리에서 던진다.
+  async function upsertChunked(table, rows, onConflict) {
+    const CHUNK = 1000
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const slice = rows.slice(i, i + CHUNK)
+      const { error } = await supabase
+        .from(table)
+        .upsert(slice, onConflict ? { onConflict } : undefined)
+      if (error) throw error
+    }
+  }
+
+  async function handleImportFile(e) {
+    const file = e.target.files?.[0]
+    e.target.value = '' // 같은 파일을 다시 골라도 change 가 뜨도록
+    if (!file) return
+
+    let backup
+    try {
+      backup = JSON.parse(await file.text())
+    } catch {
+      alert('올바른 백업 파일이 아니에요')
+      return
+    }
+
+    const ok = backup && typeof backup === 'object'
+      && Array.isArray(backup.items)
+      && Array.isArray(backup.categories)
+      && Array.isArray(backup.item_categories)
+    if (!ok) {
+      alert('올바른 백업 파일이 아니에요')
+      return
+    }
+
+    const proceed = window.confirm(
+      `백업의 항목 ${backup.items.length}개, 카테고리 ${backup.categories.length}개를 가져올까요? `
+      + '기존 데이터는 삭제되지 않고, 같은 id의 데이터는 백업 내용으로 덮어써집니다.'
+    )
+    if (!proceed) return
+
+    const uid = session.user.id
+    let stage = ''
+    try {
+      // 외래키 때문에 categories → items → item_categories 순서를 지켜야 한다
+      stage = '카테고리'
+      setImportStep(1)
+      await upsertChunked('categories', backup.categories.map((c) => ({ ...c, user_id: uid })))
+
+      stage = '항목'
+      setImportStep(2)
+      await upsertChunked('items', backup.items.map((i) => ({ ...i, user_id: uid })))
+
+      stage = '카테고리 소속'
+      setImportStep(3)
+      await upsertChunked(
+        'item_categories',
+        backup.item_categories.map((r) => ({
+          item_id: r.item_id,
+          category_id: r.category_id,
+          user_id: uid
+        })),
+        'item_id,category_id'
+      )
+
+      setImportStep(null)
+      alert(`복원 완료: 항목 ${backup.items.length}개`)
+      loadCategories()
+      refresh()
+    } catch (err) {
+      console.error(err)
+      setImportStep(null)
+      alert(`복원 실패 (${stage} 단계): ${err?.message ?? '알 수 없는 오류'}`)
+    }
+  }
+
   // 마인드맵 노드의 + 버튼에서 호출. 색상은 부모에서 물려받는다.
   async function addCategory(parentId, name) {
     const clean = name.trim()
@@ -286,9 +363,22 @@ export default function Archive({ session }) {
           <button
             className="btn-ghost"
             onClick={exportBackup}
-            disabled={exporting}
+            disabled={exporting || importStep !== null}
             title="글/링크/분류 전체를 JSON으로 저장 (이미지는 링크로 포함)"
-          >{exporting ? '내보내는 중...' : '💾 백업'}</button>
+          >{exporting ? '내보내는 중...' : '💾 내보내기'}</button>
+          <button
+            className="btn-ghost"
+            onClick={() => fileRef.current?.click()}
+            disabled={exporting || importStep !== null}
+            title="백업 JSON을 불러와 합칩니다 (기존 데이터는 삭제되지 않음)"
+          >{importStep !== null ? `복원 중... (${importStep}/3)` : '📥 가져오기'}</button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".json"
+            hidden
+            onChange={handleImportFile}
+          />
           <button className="btn-ghost" onClick={() => supabase.auth.signOut()} title="로그아웃">나가기</button>
         </div>
       </header>
