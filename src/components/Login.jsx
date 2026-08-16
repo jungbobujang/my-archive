@@ -1,3 +1,4 @@
+// 이메일/비밀번호 로그인. 계정 생성은 Supabase 대시보드에서만 한다(가입 차단).
 import { useState } from 'react'
 import { supabase } from '../supabase.js'
 

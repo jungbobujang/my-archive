@@ -1,3 +1,4 @@
+// 인증 게이트. 세션이 있으면 아카이브, 없으면 로그인 화면을 보여준다.
 import { useEffect, useState } from 'react'
 import { supabase } from './supabase.js'
 import Login from './components/Login.jsx'

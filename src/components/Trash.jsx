@@ -1,5 +1,7 @@
+// 휴지통. items.deleted_at 이 채워진 행만 모아 복원하거나 영구 삭제한다.
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../supabase.js'
+import { useEscapeKey } from '../hooks.js'
 
 function deletedLabel(iso) {
   const d = new Date(iso)
@@ -26,11 +28,7 @@ export default function Trash({ onClose, onChanged }) {
 
   useEffect(() => { load() }, [load])
 
-  useEffect(() => {
-    function onKey(e) { if (e.key === 'Escape' && !busy) handleClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  })
+  useEscapeKey(handleClose, !busy)
 
   function handleClose() {
     onChanged()

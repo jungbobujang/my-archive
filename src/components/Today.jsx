@@ -1,15 +1,12 @@
+// '오늘' 탭. 오늘 할 것(시간대별) · 예정 · 미분류 · 최근 저장 네 묶음을 보여준다.
 import { useCallback, useEffect, useState } from 'react'
-import { supabase } from '../supabase.js'
+import { supabase, fetchAllRows, ymd } from '../supabase.js'
 import SlotManager from './SlotManager.jsx'
 import { useToast } from './Toast.jsx'
 
 const UNCAT_LIMIT = 10
 const RECENT_LIMIT = 5
 const UPCOMING_LIMIT = 5
-
-function ymd(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 
 function todayLabel() {
   return new Date().toLocaleDateString('ko-KR', {
@@ -25,21 +22,6 @@ function shortDate(iso) {
   const date = new Date(y, m - 1, d)
   const wd = ['일', '월', '화', '수', '목', '금', '토'][date.getDay()]
   return `${m}/${d} (${wd})`
-}
-
-// 상한 없이 전부 받아야 하는 가벼운 조회 (id 목록 등)
-async function fetchAllRows(table, columns, tweak) {
-  const CHUNK = 1000
-  const rows = []
-  for (let from = 0; ; from += CHUNK) {
-    let q = supabase.from(table).select(columns)
-    if (tweak) q = tweak(q)
-    const { data, error } = await q.range(from, from + CHUNK - 1)
-    if (error) throw error
-    rows.push(...(data ?? []))
-    if (!data || data.length < CHUNK) break
-  }
-  return rows
 }
 
 // 항목이 속한 카테고리를 최대 2개까지 배지로. 나머지는 +N 으로 접는다.

@@ -1,5 +1,7 @@
+// 로그인 후의 메인 화면. '오늘' 탭과 '아카이브' 탭을 함께 들고 있고,
+// 목록 조회·필터·페이지네이션과 모달 열림 상태를 여기서 관리한다.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { supabase, PAGE_SIZE, subtreeIds, childrenOf } from '../supabase.js'
+import { supabase, PAGE_SIZE, subtreeIds, childrenOf, fetchAllRows } from '../supabase.js'
 import { useTheme, THEME_ICON, THEME_LABEL } from '../theme.js'
 import { useToast } from './Toast.jsx'
 import ItemModal from './ItemModal.jsx'
@@ -182,28 +184,13 @@ export default function Archive({ session }) {
     else setSlots(data ?? [])
   }, [toast])
 
-  // 상한 없이 끝까지 받는 가벼운 조회
-  const fetchAllLight = useCallback(async (table, columns, tweak) => {
-    const CHUNK = 1000
-    const rows = []
-    for (let from = 0; ; from += CHUNK) {
-      let q = supabase.from(table).select(columns)
-      if (tweak) q = tweak(q)
-      const { data, error } = await q.range(from, from + CHUNK - 1)
-      if (error) throw error
-      rows.push(...(data ?? []))
-      if (!data || data.length < CHUNK) break
-    }
-    return rows
-  }, [])
-
   const loadCounts = useCallback(async () => {
     try {
       // item_categories 에는 deleted_at 이 없어 휴지통 항목이 섞인다.
       // 살아있는 id 를 먼저 모아 걸러낸다.
       const [liveIds, links] = [
-        await fetchAllLight('items', 'id', (q) => q.is('deleted_at', null)),
-        await fetchAllLight('item_categories', 'item_id, category_id')
+        await fetchAllRows('items', 'id', (q) => q.is('deleted_at', null)),
+        await fetchAllRows('item_categories', 'item_id, category_id')
       ]
       const live = new Set(liveIds.map((r) => r.id))
       const next = {}
@@ -226,7 +213,7 @@ export default function Archive({ session }) {
       .from('items').select('id', { count: 'exact', head: true })
       .not('deleted_at', 'is', null)
     setTrashCount(trash ?? 0)
-  }, [categories, fetchAllLight, toast])
+  }, [categories, toast])
 
   useEffect(() => { loadCategories() }, [loadCategories])
   useEffect(() => { loadSlots() }, [loadSlots])
@@ -311,29 +298,13 @@ export default function Archive({ session }) {
     refresh()
   }
 
-  // PostgREST 는 한 번에 돌려주는 행 수에 상한이 있어 끝까지 나눠 받는다
-  async function fetchAll(table) {
-    const CHUNK = 1000
-    const rows = []
-    for (let from = 0; ; from += CHUNK) {
-      const { data, error } = await supabase
-        .from(table)
-        .select('*')
-        .range(from, from + CHUNK - 1)
-      if (error) throw error
-      rows.push(...(data ?? []))
-      if (!data || data.length < CHUNK) break
-    }
-    return rows
-  }
-
   async function exportBackup() {
     setExporting(true)
     try {
       const [allItems, allCategories, allLinks] = [
-        await fetchAll('items'),
-        await fetchAll('categories'),
-        await fetchAll('item_categories')
+        await fetchAllRows('items'),
+        await fetchAllRows('categories'),
+        await fetchAllRows('item_categories')
       ]
 
       const payload = {

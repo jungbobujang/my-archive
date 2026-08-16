@@ -1,5 +1,7 @@
+// '오늘' 탭에서 할 일을 묶는 시간대(아침/저녁 등) 관리 모달. 순서는 position 값을 이웃과 맞바꿔 바꾼다.
 import { useEffect, useState } from 'react'
 import { supabase, ICON_CHOICES } from '../supabase.js'
+import { useEscapeKey } from '../hooks.js'
 
 export default function SlotManager({ slots, userId, onClose, onChanged }) {
   const [rows, setRows] = useState(slots)
@@ -10,11 +12,7 @@ export default function SlotManager({ slots, userId, onClose, onChanged }) {
 
   useEffect(() => { setRows(slots) }, [slots])
 
-  useEffect(() => {
-    function onKey(e) { if (e.key === 'Escape') handleClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  })
+  useEscapeKey(handleClose)
 
   function handleClose() {
     onChanged()
