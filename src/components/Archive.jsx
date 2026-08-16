@@ -43,6 +43,26 @@ export default function Archive({ session }) {
   const [modalItem, setModalItem] = useState(undefined) // undefined=닫힘, null=새 항목, 객체=수정
   const pageRef = useRef(0)
 
+  // 좁은 화면에서 상단 보조 버튼들을 담는 ⋯ 메뉴 (넓은 화면에서는 CSS 로 그냥 한 줄이 된다)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef(null)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    function onDown(e) {
+      if (!menuRef.current?.contains(e.target)) setMenuOpen(false)
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menuOpen])
+
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search.trim()), 300)
     return () => clearTimeout(t)
@@ -407,21 +427,39 @@ export default function Archive({ session }) {
           <span className="brand-mark">A</span>
           <span className="brand-name">나의 아카이브</span>
         </div>
-        <div className="topbar-actions">
+        <div className="topbar-actions" ref={menuRef}>
           <button className="btn-primary" onClick={() => setModalItem(null)}>+ 새 항목</button>
-          <button className="btn-ghost" onClick={() => setBulkOpen(true)} title="여러 링크 저장">⧉ 여러 링크</button>
           <button
-            className="btn-ghost"
-            onClick={exportBackup}
-            disabled={exporting || importStep !== null}
-            title="글/링크/분류 전체를 JSON으로 저장 (이미지는 링크로 포함)"
-          >{exporting ? '내보내는 중...' : '💾 내보내기'}</button>
-          <button
-            className="btn-ghost"
-            onClick={() => fileRef.current?.click()}
-            disabled={exporting || importStep !== null}
-            title="백업 JSON을 불러와 합칩니다 (기존 데이터는 삭제되지 않음)"
-          >{importStep !== null ? `복원 중... (${importStep}/3)` : '📥 가져오기'}</button>
+            className="btn-ghost more-toggle"
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-expanded={menuOpen}
+            aria-label="더 보기"
+            title="더 보기"
+          >⋯</button>
+          <div className={`more-menu ${menuOpen ? 'more-open' : ''}`}>
+            <button
+              className="btn-ghost"
+              onClick={() => { setBulkOpen(true); setMenuOpen(false) }}
+              title="여러 링크 저장"
+            >⧉ 여러 링크</button>
+            <button
+              className="btn-ghost"
+              onClick={() => { exportBackup(); setMenuOpen(false) }}
+              disabled={exporting || importStep !== null}
+              title="글/링크/분류 전체를 JSON으로 저장 (이미지는 링크로 포함)"
+            >{exporting ? '내보내는 중...' : '💾 내보내기'}</button>
+            <button
+              className="btn-ghost"
+              onClick={() => { fileRef.current?.click(); setMenuOpen(false) }}
+              disabled={exporting || importStep !== null}
+              title="백업 JSON을 불러와 합칩니다 (기존 데이터는 삭제되지 않음)"
+            >{importStep !== null ? `복원 중... (${importStep}/3)` : '📥 가져오기'}</button>
+            <button
+              className="btn-ghost"
+              onClick={() => supabase.auth.signOut()}
+              title="로그아웃"
+            >나가기</button>
+          </div>
           <input
             ref={fileRef}
             type="file"
@@ -429,7 +467,6 @@ export default function Archive({ session }) {
             hidden
             onChange={handleImportFile}
           />
-          <button className="btn-ghost" onClick={() => supabase.auth.signOut()} title="로그아웃">나가기</button>
         </div>
       </header>
 

@@ -134,8 +134,10 @@ export default function MindMap({ categories, counts, onSelect, onAdd }) {
         }}
         aria-label={label}
       >
-        <circle className="mm-add-dot" cx={cx} cy={cy} r={8} />
-        <text className="mm-add-sign" x={cx} y={cy + 3.5} textAnchor="middle">+</text>
+        {/* 보이지 않는 넓은 터치 영역. SVG 가 축소돼 그려지는 폰에서 점만으로는 누르기 어렵다 */}
+        <circle className="mm-add-hit" cx={cx} cy={cy} r={22} />
+        <circle className="mm-add-dot" cx={cx} cy={cy} r={11} />
+        <text className="mm-add-sign" x={cx} y={cy + 4.5} textAnchor="middle">+</text>
       </g>
     )
   }
