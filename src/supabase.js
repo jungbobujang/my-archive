@@ -14,3 +14,15 @@ export const CATEGORIES = [
 
 export const PAGE_SIZE = 24
 export const BUCKET = 'archive-images'
+
+export function extractUrl(text) {
+  if (!text) return null
+  const m = text.match(/https?:\/\/[^\s"'<>]+/)
+  return m ? m[0] : null
+}
+
+export function youtubeThumb(url) {
+  if (!url) return null
+  const m = url.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/)
+  return m ? `https://img.youtube.com/vi/${m[1]}/hqdefault.jpg` : null
+}

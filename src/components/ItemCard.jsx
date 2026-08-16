@@ -17,9 +17,21 @@ export default function ItemCard({ item, view, onOpen, onStar, onTag, onDone }) 
   return (
     <article className={`card cat-border-${item.category} ${view === 'list' ? 'card-row' : ''} ${done ? 'card-done' : ''}`}>
       {item.image_url && (
-        <button className="card-thumb" onClick={onOpen} aria-label={`${item.title} 열기`}>
-          <img src={item.image_url} alt="" loading="lazy" />
-        </button>
+        item.link_url ? (
+          <a
+            className="card-thumb"
+            href={item.link_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`${item.title} 링크 열기`}
+          >
+            <img src={item.image_url} alt="" loading="lazy" />
+          </a>
+        ) : (
+          <button className="card-thumb" onClick={onOpen} aria-label={`${item.title} 열기`}>
+            <img src={item.image_url} alt="" loading="lazy" />
+          </button>
+        )
       )}
       <div className="card-body">
         <div className="card-top">
@@ -46,6 +58,9 @@ export default function ItemCard({ item, view, onOpen, onStar, onTag, onDone }) 
           {(item.tags || []).slice(0, 3).map((t) => (
             <button key={t} className="tag-mini" onClick={() => onTag(t)}>#{t}</button>
           ))}
+          {item.link_url && (
+            <a className="link-mini" href={item.link_url} target="_blank" rel="noopener noreferrer">🔗 열기</a>
+          )}
           <span className="card-date">{formatDate(item.created_at)}</span>
         </div>
       </div>

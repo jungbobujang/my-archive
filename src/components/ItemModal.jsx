@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { supabase, CATEGORIES, BUCKET } from '../supabase.js'
+import { supabase, CATEGORIES, BUCKET, extractUrl, youtubeThumb } from '../supabase.js'
 
 export default function ItemModal({ item, userId, onClose, onSaved }) {
   const isEdit = !!item
@@ -7,6 +7,7 @@ export default function ItemModal({ item, userId, onClose, onSaved }) {
   const [content, setContent] = useState(item?.content ?? '')
   const [category, setCategory] = useState(item?.category ?? 'idea')
   const [status, setStatus] = useState(item?.status ?? 'none')
+  const [linkUrl, setLinkUrl] = useState(item?.link_url ?? '')
   const [tagsText, setTagsText] = useState((item?.tags ?? []).join(', '))
   const [imageUrl, setImageUrl] = useState(item?.image_url ?? null)
   const [file, setFile] = useState(null)
@@ -53,12 +54,19 @@ export default function ItemModal({ item, userId, onClose, onSaved }) {
         finalImageUrl = data.publicUrl
       }
 
+      const cleanLink = linkUrl.trim() || null
+      if (!finalImageUrl && cleanLink) {
+        const thumb = youtubeThumb(cleanLink)
+        if (thumb) finalImageUrl = thumb
+      }
+
       const payload = {
         title: title.trim(),
         content,
         category,
         tags: parseTags(tagsText),
         status,
+        link_url: cleanLink,
         image_url: finalImageUrl,
         user_id: userId
       }
@@ -107,6 +115,16 @@ export default function ItemModal({ item, userId, onClose, onSaved }) {
           />
         </label>
 
+        <label className="field">
+          링크 (선택)
+          <input
+            value={linkUrl}
+            onChange={(e) => setLinkUrl(e.target.value)}
+            placeholder="https://youtube.com/... 붙여넣기"
+            inputMode="url"
+          />
+        </label>
+
         <div className="field">
           카테고리
           <div className="cat-select">
@@ -148,7 +166,13 @@ export default function ItemModal({ item, userId, onClose, onSaved }) {
           내용
           <textarea
             value={content}
-            onChange={(e) => setContent(e.target.value)}
+            onChange={(e) => {
+              setContent(e.target.value)
+              if (!linkUrl) {
+                const u = extractUrl(e.target.value)
+                if (u) setLinkUrl(u)
+              }
+            }}
             rows={8}
             placeholder="대본 전문, 아이디어 상세 등 길이 제한 없이 저장할 수 있어요"
           />
