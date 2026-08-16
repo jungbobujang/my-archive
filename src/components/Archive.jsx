@@ -17,6 +17,7 @@ export default function Archive({ session }) {
   const [categories, setCategories] = useState([])
   const [managerOpen, setManagerOpen] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
 
   const [search, setSearch] = useState('')
   const [debounced, setDebounced] = useState('')
@@ -201,6 +202,58 @@ export default function Archive({ session }) {
     }
   }
 
+  // PostgREST 는 한 번에 돌려주는 행 수에 상한이 있어 끝까지 나눠 받는다
+  async function fetchAll(table) {
+    const CHUNK = 1000
+    const rows = []
+    for (let from = 0; ; from += CHUNK) {
+      const { data, error } = await supabase
+        .from(table)
+        .select('*')
+        .range(from, from + CHUNK - 1)
+      if (error) throw error
+      rows.push(...(data ?? []))
+      if (!data || data.length < CHUNK) break
+    }
+    return rows
+  }
+
+  async function exportBackup() {
+    setExporting(true)
+    try {
+      const [allItems, allCategories, allLinks] = [
+        await fetchAll('items'),
+        await fetchAll('categories'),
+        await fetchAll('item_categories')
+      ]
+
+      const payload = {
+        exported_at: new Date().toISOString(),
+        items: allItems,
+        categories: allCategories,
+        item_categories: allLinks
+      }
+
+      const d = new Date()
+      const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
+
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `my-archive-backup-${stamp}.json`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error(err)
+      alert('백업에 실패했어요. 네트워크 상태를 확인하고 다시 시도해 주세요.')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   // 마인드맵 노드의 + 버튼에서 호출. 색상은 부모에서 물려받는다.
   async function addCategory(parentId, name) {
     const clean = name.trim()
@@ -230,6 +283,12 @@ export default function Archive({ session }) {
         <div className="topbar-actions">
           <button className="btn-primary" onClick={() => setModalItem(null)}>+ 새 항목</button>
           <button className="btn-ghost" onClick={() => setBulkOpen(true)} title="여러 링크 저장">⧉ 여러 링크</button>
+          <button
+            className="btn-ghost"
+            onClick={exportBackup}
+            disabled={exporting}
+            title="글/링크/분류 전체를 JSON으로 저장 (이미지는 링크로 포함)"
+          >{exporting ? '내보내는 중...' : '💾 백업'}</button>
           <button className="btn-ghost" onClick={() => supabase.auth.signOut()} title="로그아웃">나가기</button>
         </div>
       </header>
