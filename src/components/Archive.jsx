@@ -5,6 +5,7 @@ import ItemCard from './ItemCard.jsx'
 import CategoryManager from './CategoryManager.jsx'
 import MindMap from './MindMap.jsx'
 import BulkAdd from './BulkAdd.jsx'
+import Today from './Today.jsx'
 
 export default function Archive({ session }) {
   const [items, setItems] = useState([])
@@ -29,6 +30,8 @@ export default function Archive({ session }) {
   const [statusFilter, setStatusFilter] = useState(null)
   const [todoCount, setTodoCount] = useState(0)
   const [view, setView] = useState(() => localStorage.getItem('archive-view') || 'grid')
+  const [tab, setTab] = useState(() => localStorage.getItem('archive-tab') || 'today')
+  const [refreshKey, setRefreshKey] = useState(0)
 
   const [quickText, setQuickText] = useState('')
   const [quickBusy, setQuickBusy] = useState(false)
@@ -44,6 +47,10 @@ export default function Archive({ session }) {
   useEffect(() => {
     localStorage.setItem('archive-view', view)
   }, [view])
+
+  useEffect(() => {
+    localStorage.setItem('archive-tab', tab)
+  }, [tab])
 
   const buildQuery = useCallback((withCount, allowedIds) => {
     let q = supabase
@@ -148,6 +155,7 @@ export default function Archive({ session }) {
   const refresh = useCallback(() => {
     loadPage(0)
     loadCounts()
+    setRefreshKey((k) => k + 1) // 오늘 탭도 같이 갱신
   }, [loadPage, loadCounts])
 
   const rootCategories = useMemo(() => childrenOf(categories, null), [categories])
@@ -383,6 +391,22 @@ export default function Archive({ session }) {
         </div>
       </header>
 
+      <div className="tabs" role="tablist" aria-label="화면 전환">
+        <button
+          role="tab"
+          aria-selected={tab === 'today'}
+          className={`tab ${tab === 'today' ? 'tab-on' : ''}`}
+          onClick={() => setTab('today')}
+        >☀️ 오늘</button>
+        <button
+          role="tab"
+          aria-selected={tab === 'archive'}
+          className={`tab ${tab === 'archive' ? 'tab-on' : ''}`}
+          onClick={() => setTab('archive')}
+        >🗂 아카이브</button>
+      </div>
+
+      {tab === 'archive' && (
       <div className="search-row">
         <div className="search-box">
           <span className="search-icon" aria-hidden="true">⌕</span>
@@ -403,6 +427,7 @@ export default function Archive({ session }) {
           onClick={() => setStarredOnly((v) => !v)}
         >★ 중요</button>
       </div>
+      )}
 
       <form className="quick-row" onSubmit={quickSave}>
         <span className="quick-icon" aria-hidden="true">⚡</span>
@@ -414,6 +439,17 @@ export default function Archive({ session }) {
         />
         <button type="submit" className="btn-primary btn-sm" disabled={quickBusy || !quickText.trim()}>저장</button>
       </form>
+
+      {tab === 'today' && (
+        <Today
+          categories={categories}
+          refreshKey={refreshKey}
+          onOpen={(item) => setModalItem(item)}
+          onChanged={refresh}
+        />
+      )}
+
+      {tab === 'archive' && (<>
 
       {recentTags.length > 0 && (
         <div className="tag-row">
@@ -515,6 +551,8 @@ export default function Archive({ session }) {
           <button className="btn-ghost" onClick={() => loadPage(pageRef.current + 1)}>더 보기</button>
         </div>
       )}
+
+      </>)}
 
       {modalItem !== undefined && (
         <ItemModal
