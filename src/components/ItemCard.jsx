@@ -1,0 +1,44 @@
+import { CATEGORIES } from '../supabase.js'
+
+function formatDate(iso) {
+  const d = new Date(iso)
+  const today = new Date()
+  const diff = Math.floor((today - d) / 86400000)
+  if (diff === 0) return '오늘'
+  if (diff === 1) return '어제'
+  return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}`
+}
+
+export default function ItemCard({ item, view, onOpen, onStar, onTag }) {
+  const cat = CATEGORIES.find((c) => c.key === item.category)
+
+  return (
+    <article className={`card cat-border-${item.category} ${view === 'list' ? 'card-row' : ''}`}>
+      {item.image_url && (
+        <button className="card-thumb" onClick={onOpen} aria-label={`${item.title} 열기`}>
+          <img src={item.image_url} alt="" loading="lazy" />
+        </button>
+      )}
+      <div className="card-body">
+        <div className="card-top">
+          <button className="card-title" onClick={onOpen}>{item.title}</button>
+          <button
+            className={`star ${item.starred ? 'star-on' : ''}`}
+            onClick={onStar}
+            aria-label={item.starred ? '중요 해제' : '중요 표시'}
+          >★</button>
+        </div>
+        {item.content && !item.image_url && (
+          <p className="card-preview">{item.content.slice(0, 120)}</p>
+        )}
+        <div className="card-meta">
+          <span className={`badge badge-${item.category}`}>{cat?.label ?? item.category}</span>
+          {(item.tags || []).slice(0, 3).map((t) => (
+            <button key={t} className="tag-mini" onClick={() => onTag(t)}>#{t}</button>
+          ))}
+          <span className="card-date">{formatDate(item.created_at)}</span>
+        </div>
+      </div>
+    </article>
+  )
+}
