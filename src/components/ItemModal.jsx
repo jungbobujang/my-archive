@@ -13,12 +13,18 @@ function shortenUrl(url) {
   }
 }
 
-export default function ItemModal({ item, categories, userId, onClose, onSaved }) {
+function ymd(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+export default function ItemModal({ item, categories, slots, userId, onClose, onSaved }) {
   const isEdit = !!item
   const [title, setTitle] = useState(item?.title ?? '')
   const [content, setContent] = useState(item?.content ?? '')
   const [categoryIds, setCategoryIds] = useState(item?.category_id ? [item.category_id] : [])
   const [status, setStatus] = useState(item?.status ?? 'none')
+  const [dueDate, setDueDate] = useState(item?.due_date ?? '')
+  const [slotId, setSlotId] = useState(item?.slot_id ?? null)
   const [linkUrl, setLinkUrl] = useState(item?.link_url ?? '')
   const [tagsText, setTagsText] = useState((item?.tags ?? []).join(', '))
   const [imageUrl, setImageUrl] = useState(item?.image_url ?? null)
@@ -97,6 +103,9 @@ export default function ItemModal({ item, categories, userId, onClose, onSaved }
         category_id: categoryIds[0] ?? null, // 하위호환용 단일 컬럼
         tags: parseTags(tagsText),
         status,
+        // 할 것이 아니면 일정 정보는 남기지 않는다
+        due_date: status === 'todo' ? (dueDate || null) : null,
+        slot_id: status === 'todo' ? slotId : null,
         link_url: cleanLink,
         image_url: finalImageUrl,
         user_id: userId
@@ -228,6 +237,57 @@ export default function ItemModal({ item, categories, userId, onClose, onSaved }
             )}
           </div>
         </div>
+
+        {status === 'todo' && (
+          <>
+            <div className="field">
+              날짜
+              <div className="due-row">
+                <input
+                  type="date"
+                  value={dueDate}
+                  onChange={(e) => setDueDate(e.target.value)}
+                  aria-label="할 일 날짜"
+                />
+                <button
+                  type="button"
+                  className="chip"
+                  onClick={() => setDueDate(ymd(new Date()))}
+                >오늘</button>
+                <button
+                  type="button"
+                  className="chip"
+                  onClick={() => {
+                    const d = new Date()
+                    d.setDate(d.getDate() + 1)
+                    setDueDate(ymd(d))
+                  }}
+                >내일</button>
+                <button
+                  type="button"
+                  className="chip"
+                  onClick={() => setDueDate('')}
+                >지우기</button>
+              </div>
+            </div>
+
+            {slots.length > 0 && (
+              <div className="field">
+                시간대
+                <div className="cat-select">
+                  {slots.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className={`chip ${slotId === s.id ? 'chip-on' : ''}`}
+                      onClick={() => setSlotId(slotId === s.id ? null : s.id)}
+                    >{s.icon} {s.name}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
 
         <label className="field">
           내용

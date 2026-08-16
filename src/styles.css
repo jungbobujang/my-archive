@@ -855,3 +855,49 @@ a.card-thumb { cursor: pointer; }
 
 .today-badges { display: flex; gap: 4px; flex: none; }
 .today-hint { font-size: 11.5px; color: var(--accent); flex: none; }
+
+/* ---------- 시간대 슬롯 ---------- */
+.due-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.due-row input[type="date"] {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 7px 10px;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--surface);
+}
+.due-row input[type="date"]:focus { border-color: var(--accent); outline: none; }
+
+.slot-gear {
+  margin-left: auto;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font-size: 13px;
+  opacity: 0.6;
+}
+.slot-gear:hover { opacity: 1; }
+
+.slot-group { margin-bottom: 10px; }
+.slot-group:last-child { margin-bottom: 0; }
+.slot-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.slot-move { display: flex; gap: 2px; flex: none; }
+.slot-move button { padding: 4px 7px; line-height: 1; }
+
+.today-when {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  min-width: 58px;
+}
+.today-slot { flex: none; font-size: 11.5px; color: var(--ink-faint); }

@@ -16,6 +16,7 @@ export default function Archive({ session }) {
   const [loading, setLoading] = useState(true)
 
   const [categories, setCategories] = useState([])
+  const [slots, setSlots] = useState([])
   const [managerOpen, setManagerOpen] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -131,6 +132,14 @@ export default function Archive({ session }) {
     if (!error) setCategories(data ?? [])
   }, [])
 
+  const loadSlots = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('time_slots')
+      .select('*')
+      .order('position', { ascending: true })
+    if (!error) setSlots(data ?? [])
+  }, [])
+
   const loadCounts = useCallback(async () => {
     const results = await Promise.all(
       categories.map((c) =>
@@ -149,6 +158,7 @@ export default function Archive({ session }) {
   }, [categories])
 
   useEffect(() => { loadCategories() }, [loadCategories])
+  useEffect(() => { loadSlots() }, [loadSlots])
   useEffect(() => { loadPage(0) }, [loadPage])
   useEffect(() => { loadCounts() }, [loadCounts])
 
@@ -443,9 +453,12 @@ export default function Archive({ session }) {
       {tab === 'today' && (
         <Today
           categories={categories}
+          slots={slots}
+          userId={session.user.id}
           refreshKey={refreshKey}
           onOpen={(item) => setModalItem(item)}
           onChanged={refresh}
+          onSlotsChanged={loadSlots}
         />
       )}
 
@@ -558,6 +571,7 @@ export default function Archive({ session }) {
         <ItemModal
           item={modalItem}
           categories={categories}
+          slots={slots}
           userId={session.user.id}
           onClose={() => setModalItem(undefined)}
           onSaved={() => { setModalItem(undefined); refresh() }}

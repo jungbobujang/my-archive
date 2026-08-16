@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../supabase.js'
+import SlotManager from './SlotManager.jsx'
 
 const UNCAT_LIMIT = 10
 const RECENT_LIMIT = 5
+const UPCOMING_LIMIT = 5
+
+function ymd(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
 function todayLabel() {
   return new Date().toLocaleDateString('ko-KR', {
@@ -10,6 +16,14 @@ function todayLabel() {
     day: 'numeric',
     weekday: 'long'
   })
+}
+
+// 'YYYY-MM-DD' -> '8/18 (일)'. UTC 로 새지 않게 직접 쪼갠다.
+function shortDate(iso) {
+  const [y, m, d] = iso.split('-').map(Number)
+  const date = new Date(y, m - 1, d)
+  const wd = ['일', '월', '화', '수', '목', '금', '토'][date.getDay()]
+  return `${m}/${d} (${wd})`
 }
 
 // 상한 없이 전부 받아야 하는 가벼운 조회 (id 목록 등)
@@ -27,8 +41,10 @@ async function fetchAllRows(table, columns, tweak) {
   return rows
 }
 
-export default function Today({ categories, refreshKey, onOpen, onChanged }) {
+export default function Today({ categories, slots, userId, refreshKey, onOpen, onChanged, onSlotsChanged }) {
   const [todos, setTodos] = useState([])
+  const [upcoming, setUpcoming] = useState([])
+  const [slotOpen, setSlotOpen] = useState(false)
   const [uncat, setUncat] = useState([])
   const [uncatTotal, setUncatTotal] = useState(0)
   const [recent, setRecent] = useState([])
@@ -38,10 +54,20 @@ export default function Today({ categories, refreshKey, onOpen, onChanged }) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      // 1) 할 것 — 오래된 것부터
+      const today = ymd(new Date())
+
+      // 1) 오늘의 할 것 — 기한이 없거나 오늘까지인 것
       const { data: todoRows } = await supabase
         .from('items').select('*').eq('status', 'todo')
+        .or(`due_date.is.null,due_date.lte.${today}`)
         .order('created_at', { ascending: true })
+
+      // 1-b) 예정 — 내일 이후
+      const { data: upcomingRows } = await supabase
+        .from('items').select('*').eq('status', 'todo')
+        .gt('due_date', today)
+        .order('due_date', { ascending: true })
+        .range(0, UPCOMING_LIMIT - 1)
 
       // 2) 미분류 — 소속이 하나도 없는 항목.
       //    id 목록만 가볍게 받아 차집합을 구한 뒤 필요한 행만 다시 읽는다.
@@ -66,7 +92,7 @@ export default function Today({ categories, refreshKey, onOpen, onChanged }) {
         .order('created_at', { ascending: false })
         .range(0, RECENT_LIMIT - 1)
 
-      const shown = [...(todoRows ?? []), ...uncatRows, ...(recentRows ?? [])]
+      const shown = [...(todoRows ?? []), ...(upcomingRows ?? []), ...uncatRows, ...(recentRows ?? [])]
       const shownIds = [...new Set(shown.map((i) => i.id))]
 
       let map = {}
@@ -79,6 +105,7 @@ export default function Today({ categories, refreshKey, onOpen, onChanged }) {
       }
 
       setTodos(todoRows ?? [])
+      setUpcoming(upcomingRows ?? [])
       setUncat(uncatRows)
       setUncatTotal(uncatIds.length)
       setRecent(recentRows ?? [])
@@ -118,6 +145,26 @@ export default function Today({ categories, refreshKey, onOpen, onChanged }) {
     return <div className="center-block"><div className="spinner" aria-label="불러오는 중" /></div>
   }
 
+  const todayStr = ymd(new Date())
+
+  // 슬롯 순서대로 묶고, 슬롯 없는 항목은 마지막 "언제든" 그룹으로
+  const groups = [
+    ...slots
+      .map((s) => ({
+        key: s.id,
+        icon: s.icon,
+        name: s.name,
+        items: todos.filter((t) => t.slot_id === s.id)
+      }))
+      .filter((g) => g.items.length > 0),
+    {
+      key: '__none__',
+      icon: '📌',
+      name: '언제든',
+      items: todos.filter((t) => !t.slot_id || !slots.some((s) => s.id === t.slot_id))
+    }
+  ].filter((g) => g.items.length > 0)
+
   return (
     <div className="today">
       <p className="today-date">{todayLabel()}</p>
@@ -126,25 +173,62 @@ export default function Today({ categories, refreshKey, onOpen, onChanged }) {
         <h2 className="today-head">
           ⚡ 오늘의 할 것
           <span className="today-count">{todos.length}</span>
+          <button
+            className="slot-gear"
+            onClick={() => setSlotOpen(true)}
+            aria-label="시간대 관리"
+            title="시간대 관리"
+          >⚙️</button>
         </h2>
         {todos.length === 0 ? (
           <p className="today-empty">할 것이 없어요. 홀가분하네요!</p>
         ) : (
-          <ul className="today-list">
-            {todos.map((item) => (
-              <li key={item.id} className="today-row">
-                <button
-                  className="check"
-                  onClick={() => toggleDone(item)}
-                  aria-label="완료 처리"
-                />
-                <button className="today-title" onClick={() => onOpen(item)}>{item.title}</button>
-                <Badges item={item} />
-              </li>
-            ))}
-          </ul>
+          groups.map((g) => (
+            <div key={g.key} className="slot-group">
+              <h3 className="slot-head">
+                {g.icon} {g.name}
+                <span className="today-count">{g.items.length}</span>
+              </h3>
+              <ul className="today-list">
+                {g.items.map((item) => (
+                  <li key={item.id} className="today-row">
+                    <button
+                      className="check"
+                      onClick={() => toggleDone(item)}
+                      aria-label="완료 처리"
+                    />
+                    <button className="today-title" onClick={() => onOpen(item)}>
+                      {item.due_date && item.due_date < todayStr ? '🔴 ' : ''}{item.title}
+                    </button>
+                    <Badges item={item} />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))
         )}
       </section>
+
+      {upcoming.length > 0 && (
+        <section className="today-section">
+          <h2 className="today-head">
+            📅 예정
+            <span className="today-count">{upcoming.length}</span>
+          </h2>
+          <ul className="today-list">
+            {upcoming.map((item) => {
+              const slot = slots.find((s) => s.id === item.slot_id)
+              return (
+                <li key={item.id} className="today-row">
+                  <span className="today-when">{shortDate(item.due_date)}</span>
+                  <button className="today-title" onClick={() => onOpen(item)}>{item.title}</button>
+                  {slot && <span className="today-slot">{slot.icon} {slot.name}</span>}
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      )}
 
       <section className="today-section">
         <h2 className="today-head">
@@ -186,6 +270,15 @@ export default function Today({ categories, refreshKey, onOpen, onChanged }) {
           </ul>
         )}
       </section>
+
+      {slotOpen && (
+        <SlotManager
+          slots={slots}
+          userId={userId}
+          onClose={() => setSlotOpen(false)}
+          onChanged={() => { onSlotsChanged(); load() }}
+        />
+      )}
     </div>
   )
 }
