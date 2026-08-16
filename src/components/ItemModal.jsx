@@ -1,5 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import { supabase, BUCKET, extractUrl, youtubeThumb } from '../supabase.js'
+import { supabase, BUCKET, extractUrls, youtubeThumb } from '../supabase.js'
+
+// youtu.be/abc123 형태로 줄인다
+function shortenUrl(url) {
+  try {
+    const u = new URL(url)
+    const path = u.pathname.replace(/\/$/, '')
+    const short = `${u.hostname.replace(/^www\./, '')}${path}`
+    return short.length > 42 ? `${short.slice(0, 42)}…` : short
+  } catch {
+    return url.length > 42 ? `${url.slice(0, 42)}…` : url
+  }
+}
 
 export default function ItemModal({ item, categories, userId, onClose, onSaved }) {
   const isEdit = !!item
@@ -15,6 +27,9 @@ export default function ItemModal({ item, categories, userId, onClose, onSaved }
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const dialogRef = useRef(null)
+
+  // 수정 모드에서 DB에 저장돼 있는 링크 목록
+  const savedLinks = extractUrls(item?.link_url ?? '')
 
   useEffect(() => {
     function onKey(e) { if (e.key === 'Escape') onClose() }
@@ -54,9 +69,11 @@ export default function ItemModal({ item, categories, userId, onClose, onSaved }
         finalImageUrl = data.publicUrl
       }
 
-      const cleanLink = linkUrl.trim() || null
-      if (!finalImageUrl && cleanLink) {
-        const thumb = youtubeThumb(cleanLink)
+      const links = extractUrls(linkUrl)
+      const cleanLink = links.length > 0 ? links.join('\n') : null
+      if (!finalImageUrl && links.length > 0) {
+        // 썸네일은 첫 번째 유튜브 링크 기준
+        const thumb = links.map(youtubeThumb).find(Boolean)
         if (thumb) finalImageUrl = thumb
       }
 
@@ -117,13 +134,32 @@ export default function ItemModal({ item, categories, userId, onClose, onSaved }
 
         <label className="field">
           링크 (선택)
-          <input
+          <textarea
+            className="link-input"
             value={linkUrl}
             onChange={(e) => setLinkUrl(e.target.value)}
-            placeholder="https://youtube.com/... 붙여넣기"
+            onInput={(e) => {
+              e.target.style.height = 'auto'
+              e.target.style.height = `${e.target.scrollHeight}px`
+            }}
+            rows={2}
+            placeholder="링크 (여러 개면 줄바꿈으로 구분)"
             inputMode="url"
           />
         </label>
+
+        {isEdit && savedLinks.length > 1 && (
+          <div className="field">
+            저장된 링크 {savedLinks.length}개
+            <ul className="link-list">
+              {savedLinks.map((u) => (
+                <li key={u}>
+                  <a href={u} target="_blank" rel="noopener noreferrer">🔗 {shortenUrl(u)}</a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="field">
           카테고리
@@ -172,11 +208,15 @@ export default function ItemModal({ item, categories, userId, onClose, onSaved }
           <textarea
             value={content}
             onChange={(e) => {
-              setContent(e.target.value)
-              if (!linkUrl) {
-                const u = extractUrl(e.target.value)
-                if (u) setLinkUrl(u)
-              }
+              const next = e.target.value
+              setContent(next)
+              // 내용에서 찾은 URL 중 링크 칸에 아직 없는 것만 줄바꿈으로 덧붙인다
+              setLinkUrl((prev) => {
+                const have = new Set(extractUrls(prev))
+                const fresh = extractUrls(next).filter((u) => !have.has(u))
+                if (fresh.length === 0) return prev
+                return [...extractUrls(prev), ...fresh].join('\n')
+              })
             }}
             rows={8}
             placeholder="대본 전문, 아이디어 상세 등 길이 제한 없이 저장할 수 있어요"

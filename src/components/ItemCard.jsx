@@ -10,16 +10,18 @@ function formatDate(iso) {
 export default function ItemCard({ item, categories, view, onOpen, onStar, onTag, onDone }) {
   const cat = (categories ?? []).find((c) => c.id === item.category_id)
   const color = cat?.color ?? 'gray'
+  const links = (item.link_url ?? '').split('\n').map((s) => s.trim()).filter(Boolean)
+  const firstLink = links[0] ?? null
   const actionable = item.status === 'todo' || item.status === 'done'
   const done = item.status === 'done'
 
   return (
     <article className={`card cat-border-${color} ${view === 'list' ? 'card-row' : ''} ${done ? 'card-done' : ''}`}>
       {item.image_url && (
-        item.link_url ? (
+        firstLink ? (
           <a
             className="card-thumb"
-            href={item.link_url}
+            href={firstLink}
             target="_blank"
             rel="noopener noreferrer"
             aria-label={`${item.title} 링크 열기`}
@@ -57,8 +59,11 @@ export default function ItemCard({ item, categories, view, onOpen, onStar, onTag
           {(item.tags || []).slice(0, 3).map((t) => (
             <button key={t} className="tag-mini" onClick={() => onTag(t)}>#{t}</button>
           ))}
-          {item.link_url && (
-            <a className="link-mini" href={item.link_url} target="_blank" rel="noopener noreferrer">🔗 열기</a>
+          {links.length === 1 && (
+            <a className="link-mini" href={firstLink} target="_blank" rel="noopener noreferrer">🔗 열기</a>
+          )}
+          {links.length > 1 && (
+            <button className="link-mini link-mini-btn" onClick={onOpen}>🔗 링크 {links.length}개</button>
           )}
           <span className="card-date">{formatDate(item.created_at)}</span>
         </div>
