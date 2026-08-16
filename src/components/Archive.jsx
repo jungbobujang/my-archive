@@ -15,7 +15,12 @@ export default function Archive({ session }) {
   const [category, setCategory] = useState(null)
   const [activeTag, setActiveTag] = useState(null)
   const [starredOnly, setStarredOnly] = useState(false)
+  const [statusFilter, setStatusFilter] = useState(null)
+  const [todoCount, setTodoCount] = useState(0)
   const [view, setView] = useState(() => localStorage.getItem('archive-view') || 'grid')
+
+  const [quickText, setQuickText] = useState('')
+  const [quickBusy, setQuickBusy] = useState(false)
 
   const [modalItem, setModalItem] = useState(undefined) // undefined=닫힘, null=새 항목, 객체=수정
   const pageRef = useRef(0)
@@ -37,9 +42,10 @@ export default function Archive({ session }) {
     if (category) q = q.eq('category', category)
     if (activeTag) q = q.contains('tags', [activeTag])
     if (starredOnly) q = q.eq('starred', true)
+    if (statusFilter) q = q.eq('status', statusFilter)
     if (debounced) q = q.or(`title.ilike.%${debounced}%,content.ilike.%${debounced}%`)
     return q
-  }, [category, activeTag, starredOnly, debounced])
+  }, [category, activeTag, starredOnly, statusFilter, debounced])
 
   const loadPage = useCallback(async (page) => {
     setLoading(true)
@@ -64,6 +70,9 @@ export default function Archive({ session }) {
     const next = {}
     CATEGORIES.forEach((c, i) => { next[c.key] = results[i].count ?? 0 })
     setCounts(next)
+    const { count: tc } = await supabase
+      .from('items').select('id', { count: 'exact', head: true }).eq('status', 'todo')
+    setTodoCount(tc ?? 0)
   }, [])
 
   useEffect(() => { loadPage(0) }, [loadPage])
@@ -90,7 +99,37 @@ export default function Archive({ session }) {
     await supabase.from('items').update({ starred: !item.starred }).eq('id', item.id)
   }
 
-  const filterActive = category || activeTag || starredOnly || debounced
+  async function toggleDone(item) {
+    const next = item.status === 'done' ? 'todo' : 'done'
+    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, status: next } : i)))
+    setTodoCount((c) => Math.max(0, next === 'done' ? c - 1 : c + 1))
+    await supabase.from('items').update({ status: next }).eq('id', item.id)
+  }
+
+  async function quickSave(e) {
+    e.preventDefault()
+    const raw = quickText.trim()
+    if (!raw || quickBusy) return
+    const isTodo = raw.startsWith('!')
+    const title = (isTodo ? raw.slice(1) : raw).trim()
+    if (!title) return
+    setQuickBusy(true)
+    const { error } = await supabase.from('items').insert({
+      title,
+      content: '',
+      category: 'memo',
+      tags: [],
+      status: isTodo ? 'todo' : 'none',
+      user_id: session.user.id
+    })
+    setQuickBusy(false)
+    if (!error) {
+      setQuickText('')
+      refresh()
+    }
+  }
+
+  const filterActive = category || activeTag || starredOnly || statusFilter || debounced
 
   return (
     <div className="archive">
@@ -117,10 +156,25 @@ export default function Archive({ session }) {
           />
         </div>
         <button
+          className={`chip chip-todo ${statusFilter === 'todo' ? 'chip-on' : ''}`}
+          onClick={() => setStatusFilter(statusFilter === 'todo' ? null : 'todo')}
+        >⚡ 할 것{todoCount > 0 ? ` ${todoCount}` : ''}</button>
+        <button
           className={`chip ${starredOnly ? 'chip-on' : ''}`}
           onClick={() => setStarredOnly((v) => !v)}
         >★ 중요</button>
       </div>
+
+      <form className="quick-row" onSubmit={quickSave}>
+        <span className="quick-icon" aria-hidden="true">⚡</span>
+        <input
+          value={quickText}
+          onChange={(e) => setQuickText(e.target.value)}
+          placeholder="빠른 저장: 입력 후 엔터 (!로 시작하면 할 것으로 저장)"
+          aria-label="빠른 저장"
+        />
+        <button type="submit" className="btn-primary btn-sm" disabled={quickBusy || !quickText.trim()}>저장</button>
+      </form>
 
       {recentTags.length > 0 && (
         <div className="tag-row">
@@ -155,7 +209,7 @@ export default function Archive({ session }) {
         {filterActive && (
           <button
             className="btn-ghost btn-sm"
-            onClick={() => { setSearch(''); setCategory(null); setActiveTag(null); setStarredOnly(false) }}
+            onClick={() => { setSearch(''); setCategory(null); setActiveTag(null); setStarredOnly(false); setStatusFilter(null) }}
           >필터 초기화</button>
         )}
         <div className="view-toggle" role="group" aria-label="보기 방식">
@@ -190,6 +244,7 @@ export default function Archive({ session }) {
               view={view}
               onOpen={() => setModalItem(item)}
               onStar={() => toggleStar(item)}
+              onDone={() => toggleDone(item)}
               onTag={(t) => setActiveTag(activeTag === t ? null : t)}
             />
           ))}

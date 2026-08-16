@@ -9,11 +9,13 @@ function formatDate(iso) {
   return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}`
 }
 
-export default function ItemCard({ item, view, onOpen, onStar, onTag }) {
+export default function ItemCard({ item, view, onOpen, onStar, onTag, onDone }) {
   const cat = CATEGORIES.find((c) => c.key === item.category)
+  const actionable = item.status === 'todo' || item.status === 'done'
+  const done = item.status === 'done'
 
   return (
-    <article className={`card cat-border-${item.category} ${view === 'list' ? 'card-row' : ''}`}>
+    <article className={`card cat-border-${item.category} ${view === 'list' ? 'card-row' : ''} ${done ? 'card-done' : ''}`}>
       {item.image_url && (
         <button className="card-thumb" onClick={onOpen} aria-label={`${item.title} 열기`}>
           <img src={item.image_url} alt="" loading="lazy" />
@@ -21,6 +23,13 @@ export default function ItemCard({ item, view, onOpen, onStar, onTag }) {
       )}
       <div className="card-body">
         <div className="card-top">
+          {actionable && (
+            <button
+              className={`check ${done ? 'check-on' : ''}`}
+              onClick={onDone}
+              aria-label={done ? '다시 할 것으로 되돌리기' : '완료 처리'}
+            >{done ? '✓' : ''}</button>
+          )}
           <button className="card-title" onClick={onOpen}>{item.title}</button>
           <button
             className={`star ${item.starred ? 'star-on' : ''}`}
@@ -32,6 +41,7 @@ export default function ItemCard({ item, view, onOpen, onStar, onTag }) {
           <p className="card-preview">{item.content.slice(0, 120)}</p>
         )}
         <div className="card-meta">
+          {item.status === 'todo' && <span className="badge badge-todo">⚡ 할 것</span>}
           <span className={`badge badge-${item.category}`}>{cat?.label ?? item.category}</span>
           {(item.tags || []).slice(0, 3).map((t) => (
             <button key={t} className="tag-mini" onClick={() => onTag(t)}>#{t}</button>

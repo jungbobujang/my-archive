@@ -6,6 +6,7 @@ export default function ItemModal({ item, userId, onClose, onSaved }) {
   const [title, setTitle] = useState(item?.title ?? '')
   const [content, setContent] = useState(item?.content ?? '')
   const [category, setCategory] = useState(item?.category ?? 'idea')
+  const [status, setStatus] = useState(item?.status ?? 'none')
   const [tagsText, setTagsText] = useState((item?.tags ?? []).join(', '))
   const [imageUrl, setImageUrl] = useState(item?.image_url ?? null)
   const [file, setFile] = useState(null)
@@ -57,6 +58,7 @@ export default function ItemModal({ item, userId, onClose, onSaved }) {
         content,
         category,
         tags: parseTags(tagsText),
+        status,
         image_url: finalImageUrl,
         user_id: userId
       }
@@ -116,6 +118,29 @@ export default function ItemModal({ item, userId, onClose, onSaved }) {
                 onClick={() => setCategory(c.key)}
               >{c.icon} {c.label}</button>
             ))}
+          </div>
+        </div>
+
+        <div className="field">
+          실행 상태
+          <div className="cat-select">
+            <button
+              type="button"
+              className={`chip ${status === 'none' ? 'chip-on' : ''}`}
+              onClick={() => setStatus('none')}
+            >📦 보관용</button>
+            <button
+              type="button"
+              className={`chip ${status === 'todo' ? 'chip-on' : ''}`}
+              onClick={() => setStatus('todo')}
+            >⚡ 할 것</button>
+            {isEdit && (
+              <button
+                type="button"
+                className={`chip ${status === 'done' ? 'chip-on' : ''}`}
+                onClick={() => setStatus('done')}
+              >✓ 완료</button>
+            )}
           </div>
         </div>
 

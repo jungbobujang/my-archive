@@ -436,3 +436,58 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 @media (min-width: 900px) {
   .item-grid { grid-template-columns: repeat(4, 1fr); }
 }
+
+/* ---------- 실행 상태 (v1.1) ---------- */
+.check {
+  width: 20px; height: 20px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--ink-faint);
+  border-radius: 6px;
+  background: var(--surface);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  margin-top: 1px;
+}
+.check:hover { border-color: var(--accent); }
+.check-on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.card-done .card-title {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+}
+.card-done .card-preview { color: var(--ink-faint); }
+.badge-todo {
+  background: #fdf3d7;
+  color: #854f0b;
+}
+.chip-todo.chip-on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.quick-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px dashed var(--ink-faint);
+  border-radius: var(--radius);
+  padding: 4px 4px 4px 12px;
+  margin-bottom: 10px;
+}
+.quick-row:focus-within { border-color: var(--accent); border-style: solid; }
+.quick-icon { font-size: 14px; }
+.quick-row input {
+  flex: 1;
+  border: none;
+  background: none;
+  padding: 8px 0;
+  outline: none;
+  font-size: 14px;
+}
