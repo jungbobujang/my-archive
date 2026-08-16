@@ -2,7 +2,7 @@
 // 목록 조회·필터·페이지네이션과 모달 열림 상태를 여기서 관리한다.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase, PAGE_SIZE, subtreeIds, childrenOf, fetchAllRows } from '../supabase.js'
-import { useTheme, THEME_ICON, THEME_LABEL } from '../theme.js'
+import { useTheme } from '../theme.js'
 import { useToast } from './Toast.jsx'
 import ItemModal from './ItemModal.jsx'
 import ItemCard from './ItemCard.jsx'
@@ -12,11 +12,12 @@ import BulkAdd from './BulkAdd.jsx'
 import Today from './Today.jsx'
 import Trash from './Trash.jsx'
 import { SkeletonCards } from './Skeleton.jsx'
+import Settings from './Settings.jsx'
 
 // categoryIds 가 없을 때 넘길 고정 빈 배열 (매번 [] 를 새로 만들면 ItemCard 의 memo 가 풀린다)
 const NO_CATEGORIES = []
 
-export default function Archive({ session }) {
+export default function Archive({ session, onNavigate }) {
   const [items, setItems] = useState([])
   const [itemCats, setItemCats] = useState({}) // item_id -> [category_id]
   const [counts, setCounts] = useState({})
@@ -52,7 +53,8 @@ export default function Archive({ session }) {
   const pageRef = useRef(0)
 
   const toast = useToast()
-  const { pref: themePref, cycle: cycleTheme } = useTheme()
+  const { pref: themePref, setPref: setThemePref } = useTheme()
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   // 좁은 화면에서 상단 보조 버튼들을 담는 ⋯ 메뉴 (넓은 화면에서는 CSS 로 그냥 한 줄이 된다)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -450,10 +452,9 @@ export default function Archive({ session }) {
           <div className={`more-menu ${menuOpen ? 'more-open' : ''}`}>
             <button
               className="btn-ghost"
-              onClick={cycleTheme}
-              title={`화면 테마: ${THEME_LABEL[themePref]} (눌러서 변경)`}
-              aria-label={`화면 테마 ${THEME_LABEL[themePref]}, 눌러서 변경`}
-            >{THEME_ICON[themePref]} <span className="menu-label">{THEME_LABEL[themePref]}</span></button>
+              onClick={() => { setSettingsOpen(true); setMenuOpen(false) }}
+              title="설정 (화면 테마, 플랜)"
+            >⚙️ <span className="menu-label">설정</span></button>
             <button
               className="btn-ghost"
               onClick={() => { setBulkOpen(true); setMenuOpen(false) }}
@@ -699,6 +700,16 @@ export default function Archive({ session }) {
           userId={session.user.id}
           onClose={() => setBulkOpen(false)}
           onSaved={() => { setBulkOpen(false); refresh() }}
+        />
+      )}
+
+      {settingsOpen && (
+        <Settings
+          email={session.user.email}
+          themePref={themePref}
+          onThemeChange={setThemePref}
+          onOpenPricing={() => { setSettingsOpen(false); onNavigate('/pricing') }}
+          onClose={() => setSettingsOpen(false)}
         />
       )}
 

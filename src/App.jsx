@@ -1,14 +1,32 @@
-// 인증 게이트. 세션이 있으면 아카이브, 없으면 로그인 화면을 보여준다.
-import { useEffect, useState } from 'react'
+// 인증 게이트 + 아주 작은 라우터.
+// 화면이 둘(앱 / 요금제)뿐이라 라우팅 라이브러리 없이 History API 로 처리한다.
+// /pricing 을 주소창에 바로 쳐도 열려야 하므로, 정적 호스팅에서는 SPA 폴백이 필요하다
+// (vite preview 는 기본으로 해 준다. 서비스워커도 문서 요청은 index.html 로 폴백한다).
+import { useCallback, useEffect, useState } from 'react'
 import { supabase } from './supabase.js'
 import Login from './components/Login.jsx'
 import Archive from './components/Archive.jsx'
+import Pricing from './components/Pricing.jsx'
 import { useToast } from './components/Toast.jsx'
 
 export default function App() {
   const toast = useToast()
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [path, setPath] = useState(() => window.location.pathname)
+
+  useEffect(() => {
+    function onPop() { setPath(window.location.pathname) }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
+  const navigate = useCallback((to) => {
+    if (to === window.location.pathname) return
+    window.history.pushState({}, '', to)
+    setPath(to)
+    window.scrollTo(0, 0)
+  }, [])
 
   useEffect(() => {
     if (!supabase) { setLoading(false); return }
@@ -23,6 +41,9 @@ export default function App() {
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s))
     return () => sub.subscription.unsubscribe()
   }, [toast])
+
+  // 요금제는 로그인 없이도 볼 수 있어야 한다
+  if (path === '/pricing') return <Pricing onBack={() => navigate('/')} />
 
   if (!supabase) {
     return (
@@ -41,5 +62,7 @@ export default function App() {
 
   if (loading) return <div className="center-page"><div className="spinner" aria-label="불러오는 중" /></div>
 
-  return session ? <Archive session={session} /> : <Login />
+  return session
+    ? <Archive session={session} onNavigate={navigate} />
+    : <Login />
 }
