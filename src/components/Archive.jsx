@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase, PAGE_SIZE, subtreeIds, childrenOf } from '../supabase.js'
+import { useTheme, THEME_ICON, THEME_LABEL } from '../theme.js'
 import ItemModal from './ItemModal.jsx'
 import ItemCard from './ItemCard.jsx'
 import CategoryManager from './CategoryManager.jsx'
@@ -42,6 +43,8 @@ export default function Archive({ session }) {
 
   const [modalItem, setModalItem] = useState(undefined) // undefined=닫힘, null=새 항목, 객체=수정
   const pageRef = useRef(0)
+
+  const { pref: themePref, cycle: cycleTheme } = useTheme()
 
   // 좁은 화면에서 상단 보조 버튼들을 담는 ⋯ 메뉴 (넓은 화면에서는 CSS 로 그냥 한 줄이 된다)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -437,6 +440,12 @@ export default function Archive({ session }) {
             title="더 보기"
           >⋯</button>
           <div className={`more-menu ${menuOpen ? 'more-open' : ''}`}>
+            <button
+              className="btn-ghost"
+              onClick={cycleTheme}
+              title={`화면 테마: ${THEME_LABEL[themePref]} (눌러서 변경)`}
+              aria-label={`화면 테마 ${THEME_LABEL[themePref]}, 눌러서 변경`}
+            >{THEME_ICON[themePref]} <span className="menu-label">{THEME_LABEL[themePref]}</span></button>
             <button
               className="btn-ghost"
               onClick={() => { setBulkOpen(true); setMenuOpen(false) }}

@@ -11,7 +11,7 @@
     <meta name="theme-color" content="#22261f" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="아카이브" />
     <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
@@ -21,6 +21,24 @@
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
     />
+
+    <!-- 첫 페인트 전에 테마를 확정한다. 없으면 다크 사용자에게 흰 화면이 번쩍인다.
+         규칙은 src/theme.js 와 동일하게 유지할 것. -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('archive-theme')
+          var pref = ['system', 'light', 'dark'].indexOf(saved) >= 0 ? saved : 'system'
+          var dark = pref === 'dark'
+            || (pref === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+          var meta = document.querySelector('meta[name="theme-color"]')
+          if (meta) meta.setAttribute('content', dark ? '#191b17' : '#f4f4f1')
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light'
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -7,7 +7,7 @@
   "display": "standalone",
   "orientation": "portrait-primary",
   "background_color": "#f4f4f1",
-  "theme_color": "#22261f",
+  "theme_color": "#f4f4f1",
   "lang": "ko",
   "dir": "ltr",
   "categories": ["productivity", "utilities"],
