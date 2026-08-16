@@ -17,7 +17,7 @@ export default function ItemModal({ item, categories, userId, onClose, onSaved }
   const isEdit = !!item
   const [title, setTitle] = useState(item?.title ?? '')
   const [content, setContent] = useState(item?.content ?? '')
-  const [categoryId, setCategoryId] = useState(item?.category_id ?? null)
+  const [categoryIds, setCategoryIds] = useState(item?.category_id ? [item.category_id] : [])
   const [status, setStatus] = useState(item?.status ?? 'none')
   const [linkUrl, setLinkUrl] = useState(item?.link_url ?? '')
   const [tagsText, setTagsText] = useState((item?.tags ?? []).join(', '))
@@ -36,6 +36,20 @@ export default function ItemModal({ item, categories, userId, onClose, onSaved }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  // 수정 모드: 기존 소속을 item_categories 에서 불러온다
+  useEffect(() => {
+    if (!item?.id) return
+    let alive = true
+    ;(async () => {
+      const { data, error: err } = await supabase
+        .from('item_categories')
+        .select('category_id')
+        .eq('item_id', item.id)
+      if (alive && !err && data) setCategoryIds(data.map((r) => r.category_id))
+    })()
+    return () => { alive = false }
+  }, [item?.id])
 
   useEffect(() => {
     if (!file) { setPreview(null); return }
@@ -80,7 +94,7 @@ export default function ItemModal({ item, categories, userId, onClose, onSaved }
       const payload = {
         title: title.trim(),
         content,
-        category_id: categoryId,
+        category_id: categoryIds[0] ?? null, // 하위호환용 단일 컬럼
         tags: parseTags(tagsText),
         status,
         link_url: cleanLink,
@@ -88,10 +102,25 @@ export default function ItemModal({ item, categories, userId, onClose, onSaved }
         user_id: userId
       }
 
-      const { error: dbErr } = isEdit
-        ? await supabase.from('items').update(payload).eq('id', item.id)
-        : await supabase.from('items').insert(payload)
+      const { data: saved, error: dbErr } = isEdit
+        ? await supabase.from('items').update(payload).eq('id', item.id).select().single()
+        : await supabase.from('items').insert(payload).select().single()
       if (dbErr) throw dbErr
+
+      // 소속은 통째로 갈아끼운다 (delete → insert)
+      const { error: delErr } = await supabase
+        .from('item_categories').delete().eq('item_id', saved.id)
+      if (delErr) throw delErr
+
+      if (categoryIds.length > 0) {
+        const rows = categoryIds.map((cid) => ({
+          item_id: saved.id,
+          category_id: cid,
+          user_id: userId
+        }))
+        const { error: linkErr } = await supabase.from('item_categories').insert(rows)
+        if (linkErr) throw linkErr
+      }
 
       onSaved()
     } catch (err) {
@@ -162,19 +191,16 @@ export default function ItemModal({ item, categories, userId, onClose, onSaved }
         )}
 
         <div className="field">
-          카테고리
+          카테고리 {categoryIds.length === 0 ? '(미분류)' : `(${categoryIds.length}개 선택)`}
           <div className="cat-select">
-            <button
-              type="button"
-              className={`chip ${categoryId === null ? 'chip-on' : ''}`}
-              onClick={() => setCategoryId(null)}
-            >미분류</button>
             {categories.map((c) => (
               <button
                 key={c.id}
                 type="button"
-                className={`chip ${categoryId === c.id ? 'chip-on' : ''}`}
-                onClick={() => setCategoryId(c.id)}
+                className={`chip ${categoryIds.includes(c.id) ? 'chip-on' : ''}`}
+                onClick={() => setCategoryIds((prev) => (
+                  prev.includes(c.id) ? prev.filter((x) => x !== c.id) : [...prev, c.id]
+                ))}
               >{c.icon} {c.name}</button>
             ))}
           </div>

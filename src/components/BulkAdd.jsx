@@ -64,7 +64,11 @@ export default function BulkAdd({ categories, userId, onClose, onSaved }) {
         if (dbErr) throw dbErr
 
         if (selected.length > 0) {
-          const rows = selected.map((cid) => ({ item_id: data.id, category_id: cid }))
+          const rows = selected.map((cid) => ({
+            item_id: data.id,
+            category_id: cid,
+            user_id: userId
+          }))
           const { error: linkErr } = await supabase.from('item_categories').insert(rows)
           if (linkErr) throw linkErr
         }

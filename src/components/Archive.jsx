@@ -8,6 +8,7 @@ import BulkAdd from './BulkAdd.jsx'
 
 export default function Archive({ session }) {
   const [items, setItems] = useState([])
+  const [itemCats, setItemCats] = useState({}) // item_id -> [category_id]
   const [counts, setCounts] = useState({})
   const [total, setTotal] = useState(0)
   const [hasMore, setHasMore] = useState(false)
@@ -41,32 +42,76 @@ export default function Archive({ session }) {
     localStorage.setItem('archive-view', view)
   }, [view])
 
-  const buildQuery = useCallback((withCount) => {
+  const buildQuery = useCallback((withCount, allowedIds) => {
     let q = supabase
       .from('items')
       .select('*', withCount ? { count: 'exact' } : undefined)
       .order('created_at', { ascending: false })
-    if (categoryId) q = q.in('category_id', subtreeIds(categories, categoryId))
+    if (allowedIds) q = q.in('id', allowedIds)
     if (activeTag) q = q.contains('tags', [activeTag])
     if (starredOnly) q = q.eq('starred', true)
     if (statusFilter) q = q.eq('status', statusFilter)
     if (debounced) q = q.or(`title.ilike.%${debounced}%,content.ilike.%${debounced}%`)
     return q
-  }, [categoryId, categories, activeTag, starredOnly, statusFilter, debounced])
+  }, [activeTag, starredOnly, statusFilter, debounced])
+
+  // 선택 카테고리 + 자손에 속한 item_id 목록. 필터가 없으면 null(=제한 없음).
+  const resolveAllowedIds = useCallback(async () => {
+    if (!categoryId) return null
+    const ids = subtreeIds(categories, categoryId)
+    const { data, error } = await supabase
+      .from('item_categories')
+      .select('item_id')
+      .in('category_id', ids)
+    if (error) return []
+    return [...new Set((data ?? []).map((r) => r.item_id))]
+  }, [categoryId, categories])
+
+  // 화면에 올라온 항목들의 소속 카테고리를 한 번의 조회로 매핑한다
+  const loadItemCats = useCallback(async (itemIds, replace) => {
+    if (itemIds.length === 0) {
+      if (replace) setItemCats({})
+      return
+    }
+    const { data, error } = await supabase
+      .from('item_categories')
+      .select('item_id, category_id')
+      .in('item_id', itemIds)
+    if (error) return
+    const next = {}
+    for (const row of data ?? []) {
+      (next[row.item_id] ??= []).push(row.category_id)
+    }
+    setItemCats((prev) => (replace ? next : { ...prev, ...next }))
+  }, [])
 
   const loadPage = useCallback(async (page) => {
     setLoading(true)
+    const allowedIds = await resolveAllowedIds()
+
+    // 소속 항목이 하나도 없으면 조회 없이 0개 처리
+    if (allowedIds && allowedIds.length === 0) {
+      setItems([])
+      setItemCats({})
+      setTotal(0)
+      setHasMore(false)
+      pageRef.current = 0
+      setLoading(false)
+      return
+    }
+
     const from = page * PAGE_SIZE
-    const { data, count, error } = await buildQuery(page === 0)
+    const { data, count, error } = await buildQuery(page === 0, allowedIds)
       .range(from, from + PAGE_SIZE - 1)
     if (!error) {
       setItems((prev) => (page === 0 ? data : [...prev, ...data]))
       if (page === 0 && count !== null) setTotal(count)
       setHasMore(data.length === PAGE_SIZE)
       pageRef.current = page
+      await loadItemCats(data.map((i) => i.id), page === 0)
     }
     setLoading(false)
-  }, [buildQuery])
+  }, [buildQuery, resolveAllowedIds, loadItemCats])
 
   const loadCategories = useCallback(async () => {
     const { data, error } = await supabase
@@ -79,7 +124,10 @@ export default function Archive({ session }) {
   const loadCounts = useCallback(async () => {
     const results = await Promise.all(
       categories.map((c) =>
-        supabase.from('items').select('id', { count: 'exact', head: true }).eq('category_id', c.id)
+        supabase
+          .from('item_categories')
+          .select('item_id', { count: 'exact', head: true })
+          .eq('category_id', c.id)
       )
     )
     const next = {}
@@ -302,6 +350,7 @@ export default function Archive({ session }) {
               key={item.id}
               item={item}
               categories={categories}
+              categoryIds={itemCats[item.id] ?? []}
               view={view}
               onOpen={() => setModalItem(item)}
               onStar={() => toggleStar(item)}
