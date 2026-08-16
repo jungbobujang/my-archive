@@ -122,7 +122,9 @@ export default function MindMap({ categories, counts, onSelect, onAdd }) {
   if (categories.length === 0) {
     return (
       <div className="empty">
-        <p>카테고리가 없어요. 아래에서 첫 카테고리를 만들어 보세요.</p>
+        <span className="empty-icon" aria-hidden="true">🗺️</span>
+        <p className="empty-title">아직 카테고리가 없어요</p>
+        <p className="empty-sub">최상위 카테고리를 하나 만들면 여기에 지도가 그려집니다.</p>
         <button className="btn-primary" onClick={() => { setDraft(''); setAddingFor(null) }}>
           + 최상위 카테고리
         </button>

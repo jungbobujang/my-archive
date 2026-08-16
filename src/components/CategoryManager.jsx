@@ -103,7 +103,7 @@ export default function CategoryManager({ categories, userId, onClose, onChanged
         </div>
 
         {rows.length === 0 && (
-          <p className="cm-empty">아직 카테고리가 없어요. 아래에서 추가해 보세요.</p>
+          <p className="cm-empty">아직 카테고리가 없어요. 아래에서 첫 카테고리를 만들어 보세요.</p>
         )}
 
         <ul className="cm-list">

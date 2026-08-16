@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase, fetchAllRows, ymd } from '../supabase.js'
 import SlotManager from './SlotManager.jsx'
+import { SkeletonRows } from './Skeleton.jsx'
 import { useToast } from './Toast.jsx'
 
 const UNCAT_LIMIT = 10
@@ -141,7 +142,19 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
   }
 
   if (loading) {
-    return <div className="center-block"><div className="spinner" aria-label="불러오는 중" /></div>
+    return (
+      <div className="today">
+        <p className="today-date">{todayLabel()}</p>
+        <section className="today-section">
+          <h2 className="today-head">⚡ 오늘의 할 것</h2>
+          <SkeletonRows count={4} withCheck />
+        </section>
+        <section className="today-section">
+          <h2 className="today-head">🕐 최근 저장</h2>
+          <SkeletonRows count={3} />
+        </section>
+      </div>
+    )
   }
 
   const todayStr = ymd(new Date())
@@ -180,7 +193,7 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
           >⚙️</button>
         </h2>
         {todos.length === 0 ? (
-          <p className="today-empty">할 것이 없어요. 홀가분하네요!</p>
+          <p className="today-empty">오늘 할 것이 없어요. 홀가분하네요 🌿</p>
         ) : (
           groups.map((g) => (
             <div key={g.key} className="slot-group">
@@ -235,7 +248,7 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
           <span className="today-count">{uncatTotal}</span>
         </h2>
         {uncat.length === 0 ? (
-          <p className="today-empty">전부 분류돼 있어요.</p>
+          <p className="today-empty">전부 분류돼 있어요. 깔끔하네요 ✨</p>
         ) : (
           <ul className="today-list">
             {uncat.map((item) => (
@@ -257,7 +270,7 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
           <span className="today-count">{recent.length}</span>
         </h2>
         {recent.length === 0 ? (
-          <p className="today-empty">아직 저장한 항목이 없어요.</p>
+          <p className="today-empty">아직 저장한 항목이 없어요. 위 빠른 저장에 한 줄 적어 보세요.</p>
         ) : (
           <ul className="today-list">
             {recent.map((item) => (

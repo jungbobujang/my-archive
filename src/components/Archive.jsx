@@ -11,6 +11,7 @@ import MindMap from './MindMap.jsx'
 import BulkAdd from './BulkAdd.jsx'
 import Today from './Today.jsx'
 import Trash from './Trash.jsx'
+import { SkeletonCards } from './Skeleton.jsx'
 
 // categoryIds 가 없을 때 넘길 고정 빈 배열 (매번 [] 를 새로 만들면 ItemCard 의 memo 가 풀린다)
 const NO_CATEGORIES = []
@@ -621,12 +622,25 @@ export default function Archive({ session }) {
           onAdd={addCategory}
         />
       ) : loading && items.length === 0 ? (
-        <div className="center-block"><div className="spinner" aria-label="불러오는 중" /></div>
+        <SkeletonCards view={view} count={view === 'grid' ? 6 : 4} />
       ) : items.length === 0 ? (
         <div className="empty">
-          <p>{filterActive ? '조건에 맞는 항목이 없어요.' : '첫 항목을 저장해 보세요.'}</p>
-          {!filterActive && (
-            <button className="btn-primary" onClick={() => setModalItem(null)}>+ 새 항목 만들기</button>
+          <span className="empty-icon" aria-hidden="true">{filterActive ? '🔍' : '🗂'}</span>
+          <p className="empty-title">
+            {filterActive ? '조건에 맞는 항목이 없어요' : '아직 저장한 것이 없어요'}
+          </p>
+          <p className="empty-sub">
+            {filterActive
+              ? '검색어를 줄이거나 필터를 지워 보세요.'
+              : '떠오른 생각, 링크, 대본을 여기에 모아 두면 나중에 찾기 쉬워요.'}
+          </p>
+          {filterActive ? (
+            <button
+              className="btn-ghost btn-sm"
+              onClick={() => { setSearch(''); setCategoryId(null); setActiveTag(null); setStarredOnly(false); setStatusFilter(null) }}
+            >필터 초기화</button>
+          ) : (
+            <button className="btn-primary" onClick={() => setModalItem(null)}>+ 첫 항목 만들기</button>
           )}
         </div>
       ) : (
