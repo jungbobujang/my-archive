@@ -1,118 +1,60 @@
 # TODO-SQL
 
-여기 모인 SQL 은 **아직 실행하지 않았습니다.** 사람이 직접 Supabase 대시보드
-→ SQL Editor 에 붙여넣고 실행해 주세요. (`supabase/setup.sql` 은 수정 금지라 손대지 않았습니다.)
+Supabase 에서 사람이 직접 실행해야 하는 SQL 을 모아 두는 파일입니다.
 
 ---
 
-## 1. setup.sql 이 현재 앱보다 뒤처져 있음 ⚠️ (밤샘 작업 중 발견)
+## ✅ 1. setup.sql 따라잡기 — 처리 완료
 
-**작업 지시로 나온 항목이 아니라, README 를 현재 기능 기준으로 갱신하다가 발견한 문제입니다.**
+**상태: 검토·실행 완료 (사용자 확인), 이후 `supabase/setup.sql` 자체를 최신화했습니다.**
 
-`supabase/setup.sql` 은 v1.0 시점 그대로여서 `items` 테이블 하나만 만듭니다.
-그 뒤에 들어간 기능들이 쓰는 테이블·컬럼이 전부 빠져 있습니다.
+`supabase/setup.sql` 이 v1.0 시점 그대로여서 `categories` · `item_categories` · `time_slots`
+테이블과 `items` 의 컬럼 6개가 빠져 있던 문제였습니다.
 
-- 없는 테이블: `categories`, `item_categories`, `time_slots`
-- `items` 에 없는 컬럼: `category_id`, `status`, `due_date`, `slot_id`, `link_url`, `deleted_at`
+지금은 **`supabase/setup.sql` 하나만 실행하면 새 프로젝트가 완전히 동작**합니다.
+따로 붙여넣을 따라잡기 SQL 은 더 이상 없습니다. 여기에 있던 마이그레이션 본문은
+setup.sql 안으로 흡수했으므로 중복을 피하려고 삭제했습니다.
 
-지금 쓰고 있는 Supabase 프로젝트에는 이 스키마가 이미 손으로 들어가 있을 것입니다
-(그래서 앱이 도는 것입니다). 문제는 **새 환경에 setup.sql 만 실행하면 앱이 깨진다**는 점입니다.
-백업 복원(가져오기)도 `categories` 테이블이 없으면 첫 단계에서 실패합니다.
+setup.sql 이 하는 일:
 
-아래는 코드가 실제로 참조하는 컬럼을 역으로 정리한 "따라잡기" 마이그레이션입니다.
-`if not exists` / `add column if not exists` 로 감쌌으므로 **이미 있는 환경에서 실행해도 안전**합니다.
-다만 실제 운영 DB 의 컬럼 타입이 아래와 다를 수 있으니, 붙여넣기 전에 한 번 눈으로 대조해 주세요.
+- 테이블 4개 (categories / time_slots / items / item_categories)
+- RLS 정책 (본인 데이터만), 인덱스, 이미지 버킷 `archive-images`
+- `updated_at` 자동 갱신 트리거
+- **기본 카테고리 4종 + 시간대 5종 시드** — 가입 트리거로 새 계정에 자동 적용,
+  기존 계정에는 실행 시 채워 넣음. 그 사용자에게 이미 있으면 통째로 건너뜁니다.
+- 여러 번 다시 실행해도 안전 (`if not exists` / `drop policy if exists` / 시드 존재 검사)
 
-```sql
--- ============================================
--- 나의 아카이브 : v1.0 -> 현재 스키마 따라잡기
--- 실행 전 확인 필요. 이미 있는 항목은 건너뜁니다.
--- ============================================
+### 남아 있는 선택 사항
 
--- 1) 카테고리 (계층 구조)
-create table if not exists public.categories (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade,
-  name text not null,
-  icon text default '📁',
-  color text default 'gray',           -- src/supabase.js 의 COLOR_KEYS 와 같은 값
-  parent_id uuid references public.categories(id) on delete set null,
-  position int default 0,
-  created_at timestamptz default now()
-);
-create index if not exists categories_user_pos_idx on public.categories (user_id, position);
+- `items.category` (v1.0 의 고정 카테고리 문자열)는 코드가 더 이상 읽지 않습니다.
+  setup.sql 이 `not null` 제약은 풀어 두었지만 **열 자체는 남겨 두었습니다** —
+  옛 백업 JSON 을 복원할 때 이 열이 없으면 실패하기 때문입니다.
+  옛 백업을 더 쓸 일이 없다고 판단되면 그때 지우세요.
 
-alter table public.categories enable row level security;
-drop policy if exists "own categories all" on public.categories;
-create policy "own categories all" on public.categories
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
-
--- 2) 항목 <-> 카테고리 다대다
---    (item_id, category_id) 유일 제약이 반드시 있어야 합니다 —
---     백업 복원이 onConflict: 'item_id,category_id' 로 upsert 합니다.
-create table if not exists public.item_categories (
-  item_id uuid not null references public.items(id) on delete cascade,
-  category_id uuid not null references public.categories(id) on delete cascade,
-  user_id uuid not null references auth.users(id) on delete cascade,
-  primary key (item_id, category_id)
-);
-create index if not exists item_categories_category_idx on public.item_categories (category_id);
-
-alter table public.item_categories enable row level security;
-drop policy if exists "own item_categories all" on public.item_categories;
-create policy "own item_categories all" on public.item_categories
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
-
--- 3) 시간대 슬롯 (오늘 탭)
-create table if not exists public.time_slots (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade,
-  name text not null,
-  icon text default '🕐',
-  position int default 0,
-  created_at timestamptz default now()
-);
-create index if not exists time_slots_user_pos_idx on public.time_slots (user_id, position);
-
-alter table public.time_slots enable row level security;
-drop policy if exists "own time_slots all" on public.time_slots;
-create policy "own time_slots all" on public.time_slots
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
-
--- 4) items 에 추가된 컬럼들
-alter table public.items add column if not exists category_id uuid
-  references public.categories(id) on delete set null;   -- 하위호환용 단일 소속
-alter table public.items add column if not exists status text default 'none';  -- none | todo | done
-alter table public.items add column if not exists due_date date;
-alter table public.items add column if not exists slot_id uuid
-  references public.time_slots(id) on delete set null;
-alter table public.items add column if not exists link_url text;               -- 여러 개면 줄바꿈 구분
-alter table public.items add column if not exists deleted_at timestamptz;      -- 휴지통(soft delete)
-
--- 5) 새 화면들이 쓰는 인덱스
-create index if not exists items_user_status_idx  on public.items (user_id, status)
-  where deleted_at is null;
-create index if not exists items_user_deleted_idx on public.items (user_id, deleted_at);
-create index if not exists items_user_due_idx     on public.items (user_id, due_date)
-  where status = 'todo';
-```
-
-### 같이 검토해 주면 좋을 것
-
-- `items.category` (text, `not null default 'memo'`) 는 이제 코드에서 아무도 읽지 않습니다.
-  기본값이 있어 당장 문제는 없지만, 정리하려면 백업 후
-  `alter table public.items alter column category drop not null;` 정도만 먼저 해 두는 편이 안전합니다.
-  **컬럼 삭제는 백업 JSON 을 먼저 받아 둔 뒤에** 하세요.
-- `categories.parent_id` 를 `on delete set null` 로 뒀습니다.
-  상위 카테고리를 지우면 하위가 최상위로 올라옵니다. 함께 지우길 원하면 `cascade` 로 바꾸세요.
+  ```sql
+  -- 백업 JSON 을 먼저 받아 둔 뒤에 실행하세요. 되돌릴 수 없습니다.
+  alter table public.items drop column if exists category;
+  drop index if exists public.items_category_idx;   -- v1.0 이 만들던 인덱스
+  ```
 
 ---
 
-## 2. 그 밖에 필요한 DB 변경
+## 2. 아직 필요한 DB 변경
 
-밤샘 작업(PWA · 모바일 · 다크 모드 · 에러 처리 · 성능 · 코드 정리 · 디자인 폴리싱 · 요금제 초안)에서
-**추가로 필요한 스키마 변경은 없습니다.** 테마 설정은 `localStorage('archive-theme')` 에,
-보기·탭 선택은 기존대로 `localStorage` 에 저장합니다.
+**없습니다.**
+
+밤샘 작업(PWA · 모바일 · 다크 모드 · 에러 처리 · 성능 · 코드 정리 · 디자인 폴리싱 ·
+요금제 초안)과 이후 모바일 재점검에서 추가로 필요한 스키마 변경은 나오지 않았습니다.
+테마 설정은 `localStorage('archive-theme')` 에, 보기·탭 선택도 기존대로 `localStorage` 에 둡니다.
 
 요금제 화면은 정적 초안이라 결제·구독 테이블을 만들지 않았습니다.
-실제 유료화를 진행할 때 `subscriptions` 같은 테이블이 필요해지면 그때 이 파일에 이어서 적습니다.
+실제 유료화를 진행할 때 `subscriptions` 같은 테이블이 필요해지면 여기에 이어서 적습니다.
+
+---
+
+## 참고: 코드에서 발견했지만 DB 변경은 아닌 것
+
+- **백업에 `time_slots` 가 빠져 있습니다.** `Archive.exportBackup()` 은
+  `items` / `categories` / `item_categories` 만 내보냅니다.
+  기기를 옮기거나 복원할 때 시간대는 다시 만들어야 합니다.
+  스키마 변경 없이 프론트엔드만 고치면 되는 일이라 여기서는 손대지 않았습니다.

@@ -62,11 +62,12 @@
 
 1. [supabase.com](https://supabase.com) 에서 새 프로젝트를 만듭니다.
 2. 왼쪽 메뉴 **SQL Editor** → `supabase/setup.sql` 내용 전체를 붙여넣고 **Run**.
-   - items 테이블, RLS 정책, 이미지 버킷(archive-images), 인덱스가 생성됩니다.
-   - ⚠️ **이어서 [`TODO-SQL.md`](TODO-SQL.md) 의 따라잡기 SQL 도 실행해야 합니다.**
-     setup.sql 은 v1.0 시점 그대로여서 카테고리·다중 소속·시간대·휴지통이 쓰는
-     테이블과 컬럼이 빠져 있습니다. 이것만 실행하면 앱이 첫 화면부터 깨집니다.
+   - 테이블 4개(categories / time_slots / items / item_categories), RLS 정책,
+     인덱스, 이미지 버킷(archive-images)이 한 번에 만들어집니다.
+   - 이 파일 하나면 됩니다. 여러 번 다시 실행해도 안전합니다.
 3. **Authentication → Users → Add user** 에서 본인 계정(이메일/비밀번호)을 직접 만듭니다.
+   - 계정을 만드는 순간 기본 카테고리 4종(아이디어 / 유튜브 대본 / 이미지 / 기타 메모)과
+     시간대 5종(아침 / 오전 / 오후 / 저녁 / 밤)이 자동으로 생깁니다. 마음대로 고치거나 지우면 됩니다.
    - 다른 사람의 가입을 막으려면 **Authentication → Sign In / Up** 에서 Sign-ups 를 꺼 두세요.
 4. **Project Settings → API** 에서 두 값을 복사해 둡니다: Project URL, anon public key
 
