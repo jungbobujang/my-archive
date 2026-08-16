@@ -10,6 +10,9 @@ import BulkAdd from './BulkAdd.jsx'
 import Today from './Today.jsx'
 import Trash from './Trash.jsx'
 
+// categoryIds 가 없을 때 넘길 고정 빈 배열 (매번 [] 를 새로 만들면 ItemCard 의 memo 가 풀린다)
+const NO_CATEGORIES = []
+
 export default function Archive({ session }) {
   const [items, setItems] = useState([])
   const [itemCats, setItemCats] = useState({}) // item_id -> [category_id]
@@ -256,7 +259,8 @@ export default function Archive({ session }) {
   }, [items])
 
   // 화면을 먼저 바꾸고 저장한다. 실패하면 되돌리고 알린다.
-  async function toggleStar(item) {
+  // useCallback 인 이유: ItemCard 가 memo 라 콜백 참조가 매번 바뀌면 의미가 없다.
+  const toggleStar = useCallback(async (item) => {
     const next = !item.starred
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, starred: next } : i)))
     const { error } = await supabase.from('items').update({ starred: next }).eq('id', item.id)
@@ -264,9 +268,9 @@ export default function Archive({ session }) {
       setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, starred: !next } : i)))
       toast.error('중요 표시를 저장하지 못했어요')
     }
-  }
+  }, [toast])
 
-  async function toggleDone(item) {
+  const toggleDone = useCallback(async (item) => {
     const next = item.status === 'done' ? 'todo' : 'done'
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, status: next } : i)))
     setTodoCount((c) => Math.max(0, next === 'done' ? c - 1 : c + 1))
@@ -276,7 +280,10 @@ export default function Archive({ session }) {
       setTodoCount((c) => Math.max(0, next === 'done' ? c + 1 : c - 1))
       toast.error('완료 상태를 저장하지 못했어요')
     }
-  }
+  }, [toast])
+
+  const openItem = useCallback((item) => setModalItem(item), [])
+  const toggleTag = useCallback((t) => setActiveTag((prev) => (prev === t ? null : t)), [])
 
   async function quickSave(e) {
     e.preventDefault()
@@ -658,12 +665,12 @@ export default function Archive({ session }) {
               key={item.id}
               item={item}
               categories={categories}
-              categoryIds={itemCats[item.id] ?? []}
+              categoryIds={itemCats[item.id] ?? NO_CATEGORIES}
               view={view}
-              onOpen={() => setModalItem(item)}
-              onStar={() => toggleStar(item)}
-              onDone={() => toggleDone(item)}
-              onTag={(t) => setActiveTag(activeTag === t ? null : t)}
+              onOpen={openItem}
+              onStar={toggleStar}
+              onDone={toggleDone}
+              onTag={toggleTag}
             />
           ))}
         </div>

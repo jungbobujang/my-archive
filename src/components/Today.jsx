@@ -42,6 +42,23 @@ async function fetchAllRows(table, columns, tweak) {
   return rows
 }
 
+// 항목이 속한 카테고리를 최대 2개까지 배지로. 나머지는 +N 으로 접는다.
+function Badges({ item, categories, itemCats }) {
+  const own = categories.filter((c) => (itemCats[item.id] ?? []).includes(c.id))
+  if (own.length === 0) return null
+  const shown = own.slice(0, 2)
+  return (
+    <span className="today-badges">
+      {shown.map((c) => (
+        <span key={c.id} className={`badge badge-${c.color ?? 'gray'}`}>{c.name}</span>
+      ))}
+      {own.length > shown.length && (
+        <span className="badge badge-gray">+{own.length - shown.length}</span>
+      )}
+    </span>
+  )
+}
+
 export default function Today({ categories, slots, userId, refreshKey, onOpen, onChanged, onSlotsChanged }) {
   const toast = useToast()
   const [todos, setTodos] = useState([])
@@ -141,22 +158,6 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
     onChanged()
   }
 
-  function Badges({ item }) {
-    const own = categories.filter((c) => (itemCats[item.id] ?? []).includes(c.id))
-    if (own.length === 0) return null
-    const shown = own.slice(0, 2)
-    return (
-      <span className="today-badges">
-        {shown.map((c) => (
-          <span key={c.id} className={`badge badge-${c.color ?? 'gray'}`}>{c.name}</span>
-        ))}
-        {own.length > shown.length && (
-          <span className="badge badge-gray">+{own.length - shown.length}</span>
-        )}
-      </span>
-    )
-  }
-
   if (loading) {
     return <div className="center-block"><div className="spinner" aria-label="불러오는 중" /></div>
   }
@@ -216,7 +217,7 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
                     <button className="today-title" onClick={() => onOpen(item)}>
                       {item.due_date && item.due_date < todayStr ? '🔴 ' : ''}{item.title}
                     </button>
-                    <Badges item={item} />
+                    <Badges item={item} categories={categories} itemCats={itemCats} />
                   </li>
                 ))}
               </ul>
@@ -280,7 +281,7 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
             {recent.map((item) => (
               <li key={item.id} className="today-row">
                 <button className="today-title" onClick={() => onOpen(item)}>{item.title}</button>
-                <Badges item={item} />
+                <Badges item={item} categories={categories} itemCats={itemCats} />
               </li>
             ))}
           </ul>

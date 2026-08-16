@@ -1,3 +1,11 @@
+// 목록의 항목 하나. 갤러리(grid)와 리스트(row) 두 모양을 view prop 으로 전환한다.
+//
+// memo 로 감싼 이유: 검색어를 한 글자 칠 때마다 Archive 가 리렌더되는데,
+// 그때 화면의 카드 24개가 전부 다시 그려질 이유는 없다.
+// 대신 Archive 쪽에서 콜백을 useCallback 으로 고정하고 categoryIds 도
+// 없을 때 같은 빈 배열을 넘겨야 memo 가 실제로 걸린다.
+import { memo } from 'react'
+
 function formatDate(iso) {
   const d = new Date(iso)
   const today = new Date()
@@ -7,7 +15,7 @@ function formatDate(iso) {
   return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}`
 }
 
-export default function ItemCard({ item, categories, categoryIds, view, onOpen, onStar, onTag, onDone }) {
+function ItemCard({ item, categories, categoryIds, view, onOpen, onStar, onTag, onDone }) {
   // 소속 순서는 categories 정렬(position)을 따른다
   const own = (categories ?? []).filter((c) => (categoryIds ?? []).includes(c.id))
   const shown = own.slice(0, 3)
@@ -29,11 +37,11 @@ export default function ItemCard({ item, categories, categoryIds, view, onOpen, 
             rel="noopener noreferrer"
             aria-label={`${item.title} 링크 열기`}
           >
-            <img src={item.image_url} alt="" loading="lazy" />
+            <img src={item.image_url} alt="" loading="lazy" decoding="async" />
           </a>
         ) : (
-          <button className="card-thumb" onClick={onOpen} aria-label={`${item.title} 열기`}>
-            <img src={item.image_url} alt="" loading="lazy" />
+          <button className="card-thumb" onClick={() => onOpen(item)} aria-label={`${item.title} 열기`}>
+            <img src={item.image_url} alt="" loading="lazy" decoding="async" />
           </button>
         )
       )}
@@ -42,14 +50,14 @@ export default function ItemCard({ item, categories, categoryIds, view, onOpen, 
           {actionable && (
             <button
               className={`check ${done ? 'check-on' : ''}`}
-              onClick={onDone}
+              onClick={() => onDone(item)}
               aria-label={done ? '다시 할 것으로 되돌리기' : '완료 처리'}
             >{done ? '✓' : ''}</button>
           )}
-          <button className="card-title" onClick={onOpen}>{item.title}</button>
+          <button className="card-title" onClick={() => onOpen(item)}>{item.title}</button>
           <button
             className={`star ${item.starred ? 'star-on' : ''}`}
-            onClick={onStar}
+            onClick={() => onStar(item)}
             aria-label={item.starred ? '중요 해제' : '중요 표시'}
           >★</button>
         </div>
@@ -69,7 +77,7 @@ export default function ItemCard({ item, categories, categoryIds, view, onOpen, 
             <a className="link-mini" href={firstLink} target="_blank" rel="noopener noreferrer">🔗 열기</a>
           )}
           {links.length > 1 && (
-            <button className="link-mini link-mini-btn" onClick={onOpen}>🔗 링크 {links.length}개</button>
+            <button className="link-mini link-mini-btn" onClick={() => onOpen(item)}>🔗 링크 {links.length}개</button>
           )}
           <span className="card-date">{formatDate(item.created_at)}</span>
         </div>
@@ -77,3 +85,5 @@ export default function ItemCard({ item, categories, categoryIds, view, onOpen, 
     </article>
   )
 }
+
+export default memo(ItemCard)
