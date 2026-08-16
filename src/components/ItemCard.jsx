@@ -1,5 +1,3 @@
-import { CATEGORIES } from '../supabase.js'
-
 function formatDate(iso) {
   const d = new Date(iso)
   const today = new Date()
@@ -9,13 +7,14 @@ function formatDate(iso) {
   return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}`
 }
 
-export default function ItemCard({ item, view, onOpen, onStar, onTag, onDone }) {
-  const cat = CATEGORIES.find((c) => c.key === item.category)
+export default function ItemCard({ item, categories, view, onOpen, onStar, onTag, onDone }) {
+  const cat = (categories ?? []).find((c) => c.id === item.category_id)
+  const color = cat?.color ?? 'gray'
   const actionable = item.status === 'todo' || item.status === 'done'
   const done = item.status === 'done'
 
   return (
-    <article className={`card cat-border-${item.category} ${view === 'list' ? 'card-row' : ''} ${done ? 'card-done' : ''}`}>
+    <article className={`card cat-border-${color} ${view === 'list' ? 'card-row' : ''} ${done ? 'card-done' : ''}`}>
       {item.image_url && (
         item.link_url ? (
           <a
@@ -54,7 +53,7 @@ export default function ItemCard({ item, view, onOpen, onStar, onTag, onDone }) 
         )}
         <div className="card-meta">
           {item.status === 'todo' && <span className="badge badge-todo">⚡ 할 것</span>}
-          <span className={`badge badge-${item.category}`}>{cat?.label ?? item.category}</span>
+          {cat && <span className={`badge badge-${color}`}>{cat.name}</span>}
           {(item.tags || []).slice(0, 3).map((t) => (
             <button key={t} className="tag-mini" onClick={() => onTag(t)}>#{t}</button>
           ))}

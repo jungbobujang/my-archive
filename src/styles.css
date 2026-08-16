@@ -10,10 +10,14 @@
   --danger: #b23a2e;
   --star: #d99a1b;
 
-  --c-idea-bg: #eeedfe;   --c-idea-fg: #3c3489;   --c-idea-mid: #7f77dd;
-  --c-script-bg: #faece7; --c-script-fg: #712b13; --c-script-mid: #d85a30;
-  --c-image-bg: #e1f5ee;  --c-image-fg: #085041;  --c-image-mid: #1d9e75;
-  --c-memo-bg: #f1efe8;   --c-memo-fg: #444441;   --c-memo-mid: #888780;
+  --c-purple-bg: #eeedfe; --c-purple-fg: #3c3489; --c-purple-mid: #7f77dd;
+  --c-coral-bg: #faece7;  --c-coral-fg: #712b13;  --c-coral-mid: #d85a30;
+  --c-teal-bg: #e1f5ee;   --c-teal-fg: #085041;   --c-teal-mid: #1d9e75;
+  --c-gray-bg: #f1efe8;   --c-gray-fg: #444441;   --c-gray-mid: #888780;
+  --c-blue-bg: #e6f1fb;   --c-blue-fg: #0c447c;   --c-blue-mid: #378add;
+  --c-amber-bg: #faeeda;  --c-amber-fg: #633806;  --c-amber-mid: #ef9f27;
+  --c-pink-bg: #fbeaf0;   --c-pink-fg: #72243e;   --c-pink-mid: #d4537e;
+  --c-green-bg: #eaf3de;  --c-green-fg: #27500a;  --c-green-mid: #97c459;
 
   --radius: 10px;
   --radius-lg: 14px;
@@ -150,10 +154,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   padding: 12px 14px;
   text-align: left;
 }
-.cat-idea   { background: var(--c-idea-bg);   color: var(--c-idea-fg); }
-.cat-script { background: var(--c-script-bg); color: var(--c-script-fg); }
-.cat-image  { background: var(--c-image-bg);  color: var(--c-image-fg); }
-.cat-memo   { background: var(--c-memo-bg);   color: var(--c-memo-fg); }
+.cat-purple { background: var(--c-purple-bg); color: var(--c-purple-fg); }
+.cat-coral  { background: var(--c-coral-bg);  color: var(--c-coral-fg); }
+.cat-teal   { background: var(--c-teal-bg);   color: var(--c-teal-fg); }
+.cat-gray   { background: var(--c-gray-bg);   color: var(--c-gray-fg); }
+.cat-blue   { background: var(--c-blue-bg);   color: var(--c-blue-fg); }
+.cat-amber  { background: var(--c-amber-bg);  color: var(--c-amber-fg); }
+.cat-pink   { background: var(--c-pink-bg);   color: var(--c-pink-fg); }
+.cat-green  { background: var(--c-green-bg);  color: var(--c-green-fg); }
 .cat-on { border-color: currentColor; }
 .cat-icon { font-size: 19px; }
 .cat-label { font-weight: 600; font-size: 14px; }
@@ -201,10 +209,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   display: flex;
   flex-direction: column;
 }
-.cat-border-idea   { border-left-color: var(--c-idea-mid); }
-.cat-border-script { border-left-color: var(--c-script-mid); }
-.cat-border-image  { border-left-color: var(--c-image-mid); }
-.cat-border-memo   { border-left-color: var(--c-memo-mid); }
+.cat-border-purple { border-left-color: var(--c-purple-mid); }
+.cat-border-coral  { border-left-color: var(--c-coral-mid); }
+.cat-border-teal   { border-left-color: var(--c-teal-mid); }
+.cat-border-gray   { border-left-color: var(--c-gray-mid); }
+.cat-border-blue   { border-left-color: var(--c-blue-mid); }
+.cat-border-amber  { border-left-color: var(--c-amber-mid); }
+.cat-border-pink   { border-left-color: var(--c-pink-mid); }
+.cat-border-green  { border-left-color: var(--c-green-mid); }
 
 .card-row { flex-direction: row; }
 .card-row .card-thumb { width: 96px; flex-shrink: 0; }
@@ -272,10 +284,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   padding: 2px 8px;
   border-radius: 999px;
 }
-.badge-idea   { background: var(--c-idea-bg);   color: var(--c-idea-fg); }
-.badge-script { background: var(--c-script-bg); color: var(--c-script-fg); }
-.badge-image  { background: var(--c-image-bg);  color: var(--c-image-fg); }
-.badge-memo   { background: var(--c-memo-bg);   color: var(--c-memo-fg); }
+.badge-purple { background: var(--c-purple-bg); color: var(--c-purple-fg); }
+.badge-coral  { background: var(--c-coral-bg);  color: var(--c-coral-fg); }
+.badge-teal   { background: var(--c-teal-bg);   color: var(--c-teal-fg); }
+.badge-gray   { background: var(--c-gray-bg);   color: var(--c-gray-fg); }
+.badge-blue   { background: var(--c-blue-bg);   color: var(--c-blue-fg); }
+.badge-amber  { background: var(--c-amber-bg);  color: var(--c-amber-fg); }
+.badge-pink   { background: var(--c-pink-bg);   color: var(--c-pink-fg); }
+.badge-green  { background: var(--c-green-bg);  color: var(--c-green-fg); }
 .tag-mini {
   background: none;
   border: none;
@@ -500,3 +516,75 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 }
 .link-mini:hover { text-decoration: underline; }
 a.card-thumb { cursor: pointer; }
+
+/* ---------- 카테고리 관리 ---------- */
+.cat-manage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  color: var(--ink-faint);
+  font-size: 16px;
+  padding: 10px;
+}
+.cat-manage:hover { border-color: var(--ink-faint); background: var(--surface); }
+
+.cm-empty { color: var(--ink-soft); font-size: 14px; margin: 0 0 12px; }
+.cm-list { list-style: none; margin: 0 0 12px; padding: 0; }
+.cm-row {
+  border-bottom: 1px solid var(--line);
+  padding: 10px 0;
+}
+.cm-line { display: flex; align-items: center; gap: 8px; }
+.cm-icon {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  font-size: 17px;
+  line-height: 1;
+}
+.cm-name {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid transparent;
+  background: none;
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  font-size: 14px;
+}
+.cm-name:hover { border-color: var(--line); }
+.cm-name:focus { border-color: var(--accent); outline: none; background: var(--surface); }
+.cm-del { flex: none; color: var(--danger); }
+.cm-icons { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0 42px; }
+.cm-colors { display: flex; gap: 6px; margin: 8px 0 0 42px; }
+.cm-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  padding: 0;
+}
+.cm-dot-on { border-color: var(--ink); }
+.dot-purple { background: var(--c-purple-mid); }
+.dot-coral  { background: var(--c-coral-mid); }
+.dot-teal   { background: var(--c-teal-mid); }
+.dot-gray   { background: var(--c-gray-mid); }
+.dot-blue   { background: var(--c-blue-mid); }
+.dot-amber  { background: var(--c-amber-mid); }
+.dot-pink   { background: var(--c-pink-mid); }
+.dot-green  { background: var(--c-green-mid); }
+
+.cm-add { display: flex; gap: 8px; align-items: center; }
+.cm-add input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font-size: 14px;
+}
+.cm-add input:focus { border-color: var(--accent); outline: none; }

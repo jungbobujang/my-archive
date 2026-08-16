@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { supabase, CATEGORIES, BUCKET, extractUrl, youtubeThumb } from '../supabase.js'
+import { supabase, BUCKET, extractUrl, youtubeThumb } from '../supabase.js'
 
-export default function ItemModal({ item, userId, onClose, onSaved }) {
+export default function ItemModal({ item, categories, userId, onClose, onSaved }) {
   const isEdit = !!item
   const [title, setTitle] = useState(item?.title ?? '')
   const [content, setContent] = useState(item?.content ?? '')
-  const [category, setCategory] = useState(item?.category ?? 'idea')
+  const [categoryId, setCategoryId] = useState(item?.category_id ?? null)
   const [status, setStatus] = useState(item?.status ?? 'none')
   const [linkUrl, setLinkUrl] = useState(item?.link_url ?? '')
   const [tagsText, setTagsText] = useState((item?.tags ?? []).join(', '))
@@ -63,7 +63,7 @@ export default function ItemModal({ item, userId, onClose, onSaved }) {
       const payload = {
         title: title.trim(),
         content,
-        category,
+        category_id: categoryId,
         tags: parseTags(tagsText),
         status,
         link_url: cleanLink,
@@ -128,13 +128,18 @@ export default function ItemModal({ item, userId, onClose, onSaved }) {
         <div className="field">
           카테고리
           <div className="cat-select">
-            {CATEGORIES.map((c) => (
+            <button
+              type="button"
+              className={`chip ${categoryId === null ? 'chip-on' : ''}`}
+              onClick={() => setCategoryId(null)}
+            >미분류</button>
+            {categories.map((c) => (
               <button
-                key={c.key}
+                key={c.id}
                 type="button"
-                className={`chip ${category === c.key ? 'chip-on' : ''}`}
-                onClick={() => setCategory(c.key)}
-              >{c.icon} {c.label}</button>
+                className={`chip ${categoryId === c.id ? 'chip-on' : ''}`}
+                onClick={() => setCategoryId(c.id)}
+              >{c.icon} {c.name}</button>
             ))}
           </div>
         </div>

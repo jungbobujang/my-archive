@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { supabase, CATEGORIES, PAGE_SIZE } from '../supabase.js'
+import { supabase, PAGE_SIZE } from '../supabase.js'
 import ItemModal from './ItemModal.jsx'
 import ItemCard from './ItemCard.jsx'
+import CategoryManager from './CategoryManager.jsx'
 
 export default function Archive({ session }) {
   const [items, setItems] = useState([])
@@ -10,9 +11,12 @@ export default function Archive({ session }) {
   const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(true)
 
+  const [categories, setCategories] = useState([])
+  const [managerOpen, setManagerOpen] = useState(false)
+
   const [search, setSearch] = useState('')
   const [debounced, setDebounced] = useState('')
-  const [category, setCategory] = useState(null)
+  const [categoryId, setCategoryId] = useState(null)
   const [activeTag, setActiveTag] = useState(null)
   const [starredOnly, setStarredOnly] = useState(false)
   const [statusFilter, setStatusFilter] = useState(null)
@@ -39,13 +43,13 @@ export default function Archive({ session }) {
       .from('items')
       .select('*', withCount ? { count: 'exact' } : undefined)
       .order('created_at', { ascending: false })
-    if (category) q = q.eq('category', category)
+    if (categoryId) q = q.eq('category_id', categoryId)
     if (activeTag) q = q.contains('tags', [activeTag])
     if (starredOnly) q = q.eq('starred', true)
     if (statusFilter) q = q.eq('status', statusFilter)
     if (debounced) q = q.or(`title.ilike.%${debounced}%,content.ilike.%${debounced}%`)
     return q
-  }, [category, activeTag, starredOnly, statusFilter, debounced])
+  }, [categoryId, activeTag, starredOnly, statusFilter, debounced])
 
   const loadPage = useCallback(async (page) => {
     setLoading(true)
@@ -61,20 +65,29 @@ export default function Archive({ session }) {
     setLoading(false)
   }, [buildQuery])
 
+  const loadCategories = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('categories')
+      .select('*')
+      .order('position', { ascending: true })
+    if (!error) setCategories(data ?? [])
+  }, [])
+
   const loadCounts = useCallback(async () => {
     const results = await Promise.all(
-      CATEGORIES.map((c) =>
-        supabase.from('items').select('id', { count: 'exact', head: true }).eq('category', c.key)
+      categories.map((c) =>
+        supabase.from('items').select('id', { count: 'exact', head: true }).eq('category_id', c.id)
       )
     )
     const next = {}
-    CATEGORIES.forEach((c, i) => { next[c.key] = results[i].count ?? 0 })
+    categories.forEach((c, i) => { next[c.id] = results[i].count ?? 0 })
     setCounts(next)
     const { count: tc } = await supabase
       .from('items').select('id', { count: 'exact', head: true }).eq('status', 'todo')
     setTodoCount(tc ?? 0)
-  }, [])
+  }, [categories])
 
+  useEffect(() => { loadCategories() }, [loadCategories])
   useEffect(() => { loadPage(0) }, [loadPage])
   useEffect(() => { loadCounts() }, [loadCounts])
 
@@ -117,7 +130,7 @@ export default function Archive({ session }) {
     const { error } = await supabase.from('items').insert({
       title,
       content: '',
-      category: 'memo',
+      category_id: null,
       tags: [],
       status: isTodo ? 'todo' : 'none',
       user_id: session.user.id
@@ -129,7 +142,7 @@ export default function Archive({ session }) {
     }
   }
 
-  const filterActive = category || activeTag || starredOnly || statusFilter || debounced
+  const filterActive = categoryId || activeTag || starredOnly || statusFilter || debounced
 
   return (
     <div className="archive">
@@ -189,17 +202,23 @@ export default function Archive({ session }) {
       )}
 
       <div className="category-grid">
-        {CATEGORIES.map((c) => (
+        {categories.map((c) => (
           <button
-            key={c.key}
-            className={`cat-card cat-${c.key} ${category === c.key ? 'cat-on' : ''}`}
-            onClick={() => setCategory(category === c.key ? null : c.key)}
+            key={c.id}
+            className={`cat-card cat-${c.color} ${categoryId === c.id ? 'cat-on' : ''}`}
+            onClick={() => setCategoryId(categoryId === c.id ? null : c.id)}
           >
             <span className="cat-icon" aria-hidden="true">{c.icon}</span>
-            <span className="cat-label">{c.label}</span>
-            <span className="cat-count">{counts[c.key] ?? 0}개</span>
+            <span className="cat-label">{c.name}</span>
+            <span className="cat-count">{counts[c.id] ?? 0}개</span>
           </button>
         ))}
+        <button
+          className="cat-manage"
+          onClick={() => setManagerOpen(true)}
+          aria-label="카테고리 관리"
+          title="카테고리 관리"
+        >⚙️</button>
       </div>
 
       <div className="list-head">
@@ -209,7 +228,7 @@ export default function Archive({ session }) {
         {filterActive && (
           <button
             className="btn-ghost btn-sm"
-            onClick={() => { setSearch(''); setCategory(null); setActiveTag(null); setStarredOnly(false); setStatusFilter(null) }}
+            onClick={() => { setSearch(''); setCategoryId(null); setActiveTag(null); setStarredOnly(false); setStatusFilter(null) }}
           >필터 초기화</button>
         )}
         <div className="view-toggle" role="group" aria-label="보기 방식">
@@ -241,6 +260,7 @@ export default function Archive({ session }) {
             <ItemCard
               key={item.id}
               item={item}
+              categories={categories}
               view={view}
               onOpen={() => setModalItem(item)}
               onStar={() => toggleStar(item)}
@@ -260,9 +280,19 @@ export default function Archive({ session }) {
       {modalItem !== undefined && (
         <ItemModal
           item={modalItem}
+          categories={categories}
           userId={session.user.id}
           onClose={() => setModalItem(undefined)}
           onSaved={() => { setModalItem(undefined); refresh() }}
+        />
+      )}
+
+      {managerOpen && (
+        <CategoryManager
+          categories={categories}
+          userId={session.user.id}
+          onClose={() => setManagerOpen(false)}
+          onChanged={() => { loadCategories(); refresh() }}
         />
       )}
     </div>
