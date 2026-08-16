@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase, PAGE_SIZE, subtreeIds, childrenOf } from '../supabase.js'
 import { useTheme, THEME_ICON, THEME_LABEL } from '../theme.js'
+import { useToast } from './Toast.jsx'
 import ItemModal from './ItemModal.jsx'
 import ItemCard from './ItemCard.jsx'
 import CategoryManager from './CategoryManager.jsx'
@@ -44,6 +45,7 @@ export default function Archive({ session }) {
   const [modalItem, setModalItem] = useState(undefined) // undefined=닫힘, null=새 항목, 객체=수정
   const pageRef = useRef(0)
 
+  const toast = useToast()
   const { pref: themePref, cycle: cycleTheme } = useTheme()
 
   // 좁은 화면에서 상단 보조 버튼들을 담는 ⋯ 메뉴 (넓은 화면에서는 CSS 로 그냥 한 줄이 된다)
@@ -101,9 +103,12 @@ export default function Archive({ session }) {
       .from('item_categories')
       .select('item_id')
       .in('category_id', ids)
-    if (error) return []
+    if (error) {
+      toast.error('카테고리 필터를 적용하지 못했어요')
+      return []
+    }
     return [...new Set((data ?? []).map((r) => r.item_id))]
-  }, [categoryId, categories])
+  }, [categoryId, categories, toast])
 
   // 화면에 올라온 항목들의 소속 카테고리를 한 번의 조회로 매핑한다
   const loadItemCats = useCallback(async (itemIds, replace) => {
@@ -115,13 +120,16 @@ export default function Archive({ session }) {
       .from('item_categories')
       .select('item_id, category_id')
       .in('item_id', itemIds)
-    if (error) return
+    if (error) {
+      toast.error('항목의 카테고리 정보를 불러오지 못했어요')
+      return
+    }
     const next = {}
     for (const row of data ?? []) {
       (next[row.item_id] ??= []).push(row.category_id)
     }
     setItemCats((prev) => (replace ? next : { ...prev, ...next }))
-  }, [])
+  }, [toast])
 
   const loadPage = useCallback(async (page) => {
     setLoading(true)
@@ -147,25 +155,29 @@ export default function Archive({ session }) {
       setHasMore(data.length === PAGE_SIZE)
       pageRef.current = page
       await loadItemCats(data.map((i) => i.id), page === 0)
+    } else {
+      toast.error('목록을 불러오지 못했어요. 연결 상태를 확인해 주세요')
     }
     setLoading(false)
-  }, [buildQuery, resolveAllowedIds, loadItemCats])
+  }, [buildQuery, resolveAllowedIds, loadItemCats, toast])
 
   const loadCategories = useCallback(async () => {
     const { data, error } = await supabase
       .from('categories')
       .select('*')
       .order('position', { ascending: true })
-    if (!error) setCategories(data ?? [])
-  }, [])
+    if (error) toast.error('카테고리를 불러오지 못했어요')
+    else setCategories(data ?? [])
+  }, [toast])
 
   const loadSlots = useCallback(async () => {
     const { data, error } = await supabase
       .from('time_slots')
       .select('*')
       .order('position', { ascending: true })
-    if (!error) setSlots(data ?? [])
-  }, [])
+    if (error) toast.error('시간대를 불러오지 못했어요')
+    else setSlots(data ?? [])
+  }, [toast])
 
   // 상한 없이 끝까지 받는 가벼운 조회
   const fetchAllLight = useCallback(async (table, columns, tweak) => {
@@ -199,6 +211,7 @@ export default function Archive({ session }) {
       setCounts(next)
     } catch (err) {
       console.error(err)
+      toast.error('카테고리별 개수를 세지 못했어요')
     }
 
     const { count: tc } = await supabase
@@ -210,7 +223,7 @@ export default function Archive({ session }) {
       .from('items').select('id', { count: 'exact', head: true })
       .not('deleted_at', 'is', null)
     setTrashCount(trash ?? 0)
-  }, [categories, fetchAllLight])
+  }, [categories, fetchAllLight, toast])
 
   useEffect(() => { loadCategories() }, [loadCategories])
   useEffect(() => { loadSlots() }, [loadSlots])
@@ -242,16 +255,27 @@ export default function Archive({ session }) {
     return seen
   }, [items])
 
+  // 화면을 먼저 바꾸고 저장한다. 실패하면 되돌리고 알린다.
   async function toggleStar(item) {
-    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, starred: !i.starred } : i)))
-    await supabase.from('items').update({ starred: !item.starred }).eq('id', item.id)
+    const next = !item.starred
+    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, starred: next } : i)))
+    const { error } = await supabase.from('items').update({ starred: next }).eq('id', item.id)
+    if (error) {
+      setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, starred: !next } : i)))
+      toast.error('중요 표시를 저장하지 못했어요')
+    }
   }
 
   async function toggleDone(item) {
     const next = item.status === 'done' ? 'todo' : 'done'
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, status: next } : i)))
     setTodoCount((c) => Math.max(0, next === 'done' ? c - 1 : c + 1))
-    await supabase.from('items').update({ status: next }).eq('id', item.id)
+    const { error } = await supabase.from('items').update({ status: next }).eq('id', item.id)
+    if (error) {
+      setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, status: item.status } : i)))
+      setTodoCount((c) => Math.max(0, next === 'done' ? c + 1 : c - 1))
+      toast.error('완료 상태를 저장하지 못했어요')
+    }
   }
 
   async function quickSave(e) {
@@ -271,10 +295,13 @@ export default function Archive({ session }) {
       user_id: session.user.id
     })
     setQuickBusy(false)
-    if (!error) {
-      setQuickText('')
-      refresh()
+    if (error) {
+      toast.error('저장하지 못했어요. 연결 상태를 확인해 주세요')
+      return
     }
+    setQuickText('')
+    toast.success(isTodo ? '할 것으로 저장했어요' : '저장했어요')
+    refresh()
   }
 
   // PostgREST 는 한 번에 돌려주는 행 수에 상한이 있어 끝까지 나눠 받는다
@@ -321,9 +348,10 @@ export default function Archive({ session }) {
       a.click()
       a.remove()
       URL.revokeObjectURL(url)
+      toast.success(`백업 파일을 내려받았어요 (항목 ${allItems.length}개)`)
     } catch (err) {
       console.error(err)
-      alert('백업에 실패했어요. 네트워크 상태를 확인하고 다시 시도해 주세요.')
+      toast.error('백업에 실패했어요. 연결 상태를 확인하고 다시 시도해 주세요')
     } finally {
       setExporting(false)
     }
@@ -350,7 +378,7 @@ export default function Archive({ session }) {
     try {
       backup = JSON.parse(await file.text())
     } catch {
-      alert('올바른 백업 파일이 아니에요')
+      toast.error('읽을 수 없는 파일이에요. JSON 백업 파일인지 확인해 주세요')
       return
     }
 
@@ -359,7 +387,7 @@ export default function Archive({ session }) {
       && Array.isArray(backup.categories)
       && Array.isArray(backup.item_categories)
     if (!ok) {
-      alert('올바른 백업 파일이 아니에요')
+      toast.error('백업 파일 형식이 맞지 않아요 (items·categories·item_categories 필요)')
       return
     }
 
@@ -394,13 +422,13 @@ export default function Archive({ session }) {
       )
 
       setImportStep(null)
-      alert(`복원 완료: 항목 ${backup.items.length}개`)
+      toast.success(`복원 완료: 항목 ${backup.items.length}개`)
       loadCategories()
       refresh()
     } catch (err) {
       console.error(err)
       setImportStep(null)
-      alert(`복원 실패 (${stage} 단계): ${err?.message ?? '알 수 없는 오류'}`)
+      toast.error(`복원 실패 (${stage} 단계): ${err?.message ?? '알 수 없는 오류'}`)
     }
   }
 
@@ -418,7 +446,8 @@ export default function Archive({ session }) {
       position,
       user_id: session.user.id
     })
-    if (!error) loadCategories()
+    if (error) toast.error('카테고리를 추가하지 못했어요')
+    else loadCategories()
   }
 
   const filterActive = categoryId || activeTag || starredOnly || statusFilter || debounced
@@ -465,7 +494,10 @@ export default function Archive({ session }) {
             >{importStep !== null ? `복원 중... (${importStep}/3)` : '📥 가져오기'}</button>
             <button
               className="btn-ghost"
-              onClick={() => supabase.auth.signOut()}
+              onClick={async () => {
+                const { error } = await supabase.auth.signOut()
+                if (error) toast.error('로그아웃하지 못했어요')
+              }}
               title="로그아웃"
             >나가기</button>
           </div>

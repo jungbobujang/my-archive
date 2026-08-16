@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../supabase.js'
 import SlotManager from './SlotManager.jsx'
+import { useToast } from './Toast.jsx'
 
 const UNCAT_LIMIT = 10
 const RECENT_LIMIT = 5
@@ -42,6 +43,7 @@ async function fetchAllRows(table, columns, tweak) {
 }
 
 export default function Today({ categories, slots, userId, refreshKey, onOpen, onChanged, onSlotsChanged }) {
+  const toast = useToast()
   const [todos, setTodos] = useState([])
   const [upcoming, setUpcoming] = useState([])
   const [slotOpen, setSlotOpen] = useState(false)
@@ -57,17 +59,19 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
       const today = ymd(new Date())
 
       // 1) 오늘의 할 것 — 기한이 없거나 오늘까지인 것
-      const { data: todoRows } = await supabase
+      const { data: todoRows, error: todoErr } = await supabase
         .from('items').select('*').eq('status', 'todo').is('deleted_at', null)
         .or(`due_date.is.null,due_date.lte.${today}`)
         .order('created_at', { ascending: true })
+      if (todoErr) throw todoErr
 
       // 1-b) 예정 — 내일 이후
-      const { data: upcomingRows } = await supabase
+      const { data: upcomingRows, error: upErr } = await supabase
         .from('items').select('*').eq('status', 'todo').is('deleted_at', null)
         .gt('due_date', today)
         .order('due_date', { ascending: true })
         .range(0, UPCOMING_LIMIT - 1)
+      if (upErr) throw upErr
 
       // 2) 미분류 — 소속이 하나도 없는 항목.
       //    id 목록만 가볍게 받아 차집합을 구한 뒤 필요한 행만 다시 읽는다.
@@ -80,27 +84,30 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
 
       let uncatRows = []
       if (uncatIds.length > 0) {
-        const { data } = await supabase
+        const { data, error: uncatErr } = await supabase
           .from('items').select('*').in('id', uncatIds.slice(0, UNCAT_LIMIT))
           .is('deleted_at', null)
           .order('created_at', { ascending: false })
+        if (uncatErr) throw uncatErr
         uncatRows = data ?? []
       }
 
       // 3) 최근 저장
-      const { data: recentRows } = await supabase
+      const { data: recentRows, error: recentErr } = await supabase
         .from('items').select('*')
         .is('deleted_at', null)
         .order('created_at', { ascending: false })
         .range(0, RECENT_LIMIT - 1)
+      if (recentErr) throw recentErr
 
       const shown = [...(todoRows ?? []), ...(upcomingRows ?? []), ...uncatRows, ...(recentRows ?? [])]
       const shownIds = [...new Set(shown.map((i) => i.id))]
 
       let map = {}
       if (shownIds.length > 0) {
-        const { data: catRows } = await supabase
+        const { data: catRows, error: catErr } = await supabase
           .from('item_categories').select('item_id, category_id').in('item_id', shownIds)
+        if (catErr) throw catErr
         for (const row of catRows ?? []) {
           (map[row.item_id] ??= []).push(row.category_id)
         }
@@ -114,16 +121,23 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
       setItemCats(map)
     } catch (err) {
       console.error(err)
+      toast.error('오늘 화면을 불러오지 못했어요. 연결 상태를 확인해 주세요')
     }
     setLoading(false)
-  }, [])
+  }, [toast])
 
   useEffect(() => { load() }, [load, refreshKey])
 
   async function toggleDone(item) {
     const next = item.status === 'done' ? 'todo' : 'done'
+    const before = todos
     setTodos((prev) => prev.filter((t) => t.id !== item.id))
-    await supabase.from('items').update({ status: next }).eq('id', item.id)
+    const { error } = await supabase.from('items').update({ status: next }).eq('id', item.id)
+    if (error) {
+      setTodos(before)
+      toast.error('완료 처리를 저장하지 못했어요')
+      return
+    }
     onChanged()
   }
 
