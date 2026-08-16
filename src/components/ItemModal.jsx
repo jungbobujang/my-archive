@@ -141,9 +141,12 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   }
 
   async function handleDelete() {
-    if (!window.confirm('이 항목을 삭제할까요? 되돌릴 수 없어요.')) return
+    if (!window.confirm('휴지통으로 이동할까요? 언제든 복원할 수 있어요')) return
     setBusy(true)
-    const { error: err } = await supabase.from('items').delete().eq('id', item.id)
+    const { error: err } = await supabase
+      .from('items')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', item.id)
     if (err) {
       setError('삭제에 실패했어요.')
       setBusy(false)

@@ -58,13 +58,13 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
 
       // 1) 오늘의 할 것 — 기한이 없거나 오늘까지인 것
       const { data: todoRows } = await supabase
-        .from('items').select('*').eq('status', 'todo')
+        .from('items').select('*').eq('status', 'todo').is('deleted_at', null)
         .or(`due_date.is.null,due_date.lte.${today}`)
         .order('created_at', { ascending: true })
 
       // 1-b) 예정 — 내일 이후
       const { data: upcomingRows } = await supabase
-        .from('items').select('*').eq('status', 'todo')
+        .from('items').select('*').eq('status', 'todo').is('deleted_at', null)
         .gt('due_date', today)
         .order('due_date', { ascending: true })
         .range(0, UPCOMING_LIMIT - 1)
@@ -72,7 +72,7 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
       // 2) 미분류 — 소속이 하나도 없는 항목.
       //    id 목록만 가볍게 받아 차집합을 구한 뒤 필요한 행만 다시 읽는다.
       const [idx, links] = [
-        await fetchAllRows('items', 'id, created_at', (q) => q.order('created_at', { ascending: false })),
+        await fetchAllRows('items', 'id, created_at', (q) => q.is('deleted_at', null).order('created_at', { ascending: false })),
         await fetchAllRows('item_categories', 'item_id')
       ]
       const categorized = new Set(links.map((r) => r.item_id))
@@ -82,6 +82,7 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
       if (uncatIds.length > 0) {
         const { data } = await supabase
           .from('items').select('*').in('id', uncatIds.slice(0, UNCAT_LIMIT))
+          .is('deleted_at', null)
           .order('created_at', { ascending: false })
         uncatRows = data ?? []
       }
@@ -89,6 +90,7 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
       // 3) 최근 저장
       const { data: recentRows } = await supabase
         .from('items').select('*')
+        .is('deleted_at', null)
         .order('created_at', { ascending: false })
         .range(0, RECENT_LIMIT - 1)
 

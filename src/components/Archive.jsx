@@ -6,6 +6,7 @@ import CategoryManager from './CategoryManager.jsx'
 import MindMap from './MindMap.jsx'
 import BulkAdd from './BulkAdd.jsx'
 import Today from './Today.jsx'
+import Trash from './Trash.jsx'
 
 export default function Archive({ session }) {
   const [items, setItems] = useState([])
@@ -20,6 +21,8 @@ export default function Archive({ session }) {
   const [managerOpen, setManagerOpen] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [trashCount, setTrashCount] = useState(0)
+  const [trashOpen, setTrashOpen] = useState(false)
   const [importStep, setImportStep] = useState(null) // null | 1 | 2 | 3
   const fileRef = useRef(null)
 
@@ -57,6 +60,7 @@ export default function Archive({ session }) {
     let q = supabase
       .from('items')
       .select('*', withCount ? { count: 'exact' } : undefined)
+      .is('deleted_at', null)
       .order('created_at', { ascending: false })
     if (allowedIds) q = q.in('id', allowedIds)
     if (activeTag) q = q.contains('tags', [activeTag])
@@ -140,22 +144,50 @@ export default function Archive({ session }) {
     if (!error) setSlots(data ?? [])
   }, [])
 
+  // 상한 없이 끝까지 받는 가벼운 조회
+  const fetchAllLight = useCallback(async (table, columns, tweak) => {
+    const CHUNK = 1000
+    const rows = []
+    for (let from = 0; ; from += CHUNK) {
+      let q = supabase.from(table).select(columns)
+      if (tweak) q = tweak(q)
+      const { data, error } = await q.range(from, from + CHUNK - 1)
+      if (error) throw error
+      rows.push(...(data ?? []))
+      if (!data || data.length < CHUNK) break
+    }
+    return rows
+  }, [])
+
   const loadCounts = useCallback(async () => {
-    const results = await Promise.all(
-      categories.map((c) =>
-        supabase
-          .from('item_categories')
-          .select('item_id', { count: 'exact', head: true })
-          .eq('category_id', c.id)
-      )
-    )
-    const next = {}
-    categories.forEach((c, i) => { next[c.id] = results[i].count ?? 0 })
-    setCounts(next)
+    try {
+      // item_categories 에는 deleted_at 이 없어 휴지통 항목이 섞인다.
+      // 살아있는 id 를 먼저 모아 걸러낸다.
+      const [liveIds, links] = [
+        await fetchAllLight('items', 'id', (q) => q.is('deleted_at', null)),
+        await fetchAllLight('item_categories', 'item_id, category_id')
+      ]
+      const live = new Set(liveIds.map((r) => r.id))
+      const next = {}
+      for (const c of categories) next[c.id] = 0
+      for (const row of links) {
+        if (live.has(row.item_id) && row.category_id in next) next[row.category_id]++
+      }
+      setCounts(next)
+    } catch (err) {
+      console.error(err)
+    }
+
     const { count: tc } = await supabase
-      .from('items').select('id', { count: 'exact', head: true }).eq('status', 'todo')
+      .from('items').select('id', { count: 'exact', head: true })
+      .eq('status', 'todo').is('deleted_at', null)
     setTodoCount(tc ?? 0)
-  }, [categories])
+
+    const { count: trash } = await supabase
+      .from('items').select('id', { count: 'exact', head: true })
+      .not('deleted_at', 'is', null)
+    setTrashCount(trash ?? 0)
+  }, [categories, fetchAllLight])
 
   useEffect(() => { loadCategories() }, [loadCategories])
   useEffect(() => { loadSlots() }, [loadSlots])
@@ -565,7 +597,20 @@ export default function Archive({ session }) {
         </div>
       )}
 
+      <div className="trash-link-row">
+        <button className="trash-link" onClick={() => setTrashOpen(true)}>
+          🗑 휴지통 ({trashCount})
+        </button>
+      </div>
+
       </>)}
+
+      {trashOpen && (
+        <Trash
+          onClose={() => setTrashOpen(false)}
+          onChanged={refresh}
+        />
+      )}
 
       {modalItem !== undefined && (
         <ItemModal
