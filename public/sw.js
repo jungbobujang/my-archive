@@ -9,7 +9,7 @@
  * 버전을 올리면 옛 캐시는 activate 에서 통째로 지워진다.
  */
 
-const VERSION = 'v1'
+const VERSION = 'v2'
 const SHELL_CACHE = `archive-shell-${VERSION}`
 const RUNTIME_CACHE = `archive-runtime-${VERSION}`
 const KEEP = [SHELL_CACHE, RUNTIME_CACHE]
@@ -22,7 +22,8 @@ const SHELL_URLS = [
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/icons/apple-touch-icon.png',
-  '/icons/favicon-32.png'
+  '/icons/favicon-32.png',
+  '/favicon.svg'
 ]
 
 const FONT_CDN = 'https://cdn.jsdelivr.net/'
