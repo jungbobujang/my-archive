@@ -4,6 +4,7 @@ import ItemModal from './ItemModal.jsx'
 import ItemCard from './ItemCard.jsx'
 import CategoryManager from './CategoryManager.jsx'
 import MindMap from './MindMap.jsx'
+import BulkAdd from './BulkAdd.jsx'
 
 export default function Archive({ session }) {
   const [items, setItems] = useState([])
@@ -14,6 +15,7 @@ export default function Archive({ session }) {
 
   const [categories, setCategories] = useState([])
   const [managerOpen, setManagerOpen] = useState(false)
+  const [bulkOpen, setBulkOpen] = useState(false)
 
   const [search, setSearch] = useState('')
   const [debounced, setDebounced] = useState('')
@@ -179,6 +181,7 @@ export default function Archive({ session }) {
         </div>
         <div className="topbar-actions">
           <button className="btn-primary" onClick={() => setModalItem(null)}>+ 새 항목</button>
+          <button className="btn-ghost" onClick={() => setBulkOpen(true)} title="여러 링크 저장">⧉ 여러 링크</button>
           <button className="btn-ghost" onClick={() => supabase.auth.signOut()} title="로그아웃">나가기</button>
         </div>
       </header>
@@ -322,6 +325,15 @@ export default function Archive({ session }) {
           userId={session.user.id}
           onClose={() => setModalItem(undefined)}
           onSaved={() => { setModalItem(undefined); refresh() }}
+        />
+      )}
+
+      {bulkOpen && (
+        <BulkAdd
+          categories={categories}
+          userId={session.user.id}
+          onClose={() => setBulkOpen(false)}
+          onSaved={() => { setBulkOpen(false); refresh() }}
         />
       )}
 

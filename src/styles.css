@@ -715,3 +715,28 @@ a.card-thumb { cursor: pointer; }
   background: #fff;
   outline: none;
 }
+
+/* ---------- 여러 링크 저장 ---------- */
+.bulk-count {
+  margin: -4px 0 12px;
+  font-size: 12.5px;
+  color: var(--ink-faint);
+}
+.bulk-count-on { color: var(--accent); font-weight: 600; }
+
+.bulk-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--ink-soft);
+  margin-bottom: 14px;
+}
+.bulk-check input { width: 16px; height: 16px; }
+
+.bulk-done {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}

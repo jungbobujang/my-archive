@@ -37,6 +37,19 @@ export function extractUrl(text) {
   return m ? m[0] : null
 }
 
+export async function fetchLinkTitle(url) {
+  try {
+    const res = await fetch(`https://noembed.com/embed?url=${encodeURIComponent(url)}`)
+    const data = await res.json()
+    return data.title || null
+  } catch { return null }
+}
+
+export function extractUrls(text) {
+  if (!text) return []
+  return [...new Set(text.match(/https?:\/\/[^\s"'<>]+/g) || [])]
+}
+
 export function youtubeThumb(url) {
   if (!url) return null
   const m = url.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/)
