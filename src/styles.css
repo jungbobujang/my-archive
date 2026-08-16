@@ -20,6 +20,7 @@
   --todo-bg: #fdf3d7;
   --todo-fg: #854f0b;
   --scrim: rgba(28, 30, 25, 0.45);
+  --skel-sweep: #ffffff;
   --shadow-menu: 0 12px 30px rgba(24, 26, 21, 0.16);
 
   --c-purple-bg: #eeedfe; --c-purple-fg: #3c3489; --c-purple-mid: #7f77dd;
@@ -58,6 +59,7 @@
   --todo-bg: #3d3218;
   --todo-fg: #f0cf8c;
   --scrim: rgba(8, 9, 7, 0.62);
+  --skel-sweep: #454a41;
   --shadow-menu: 0 12px 30px rgba(0, 0, 0, 0.45);
 
   --c-purple-bg: #2a2745; --c-purple-fg: #c3bdf6; --c-purple-mid: #8b83e6;
@@ -260,8 +262,15 @@ a:focus-visible {
 /* 선택된 카드는 호버와 구분돼야 하므로 테두리를 더 진하게 */
 .cat-on { border-color: currentColor; box-shadow: inset 0 0 0 1px currentColor; }
 .cat-icon { font-size: 19px; }
-.cat-label { font-weight: 600; font-size: 14px; }
-.cat-count { margin-left: auto; font-size: 12.5px; opacity: 0.75; }
+.cat-label {
+  font-weight: 600;
+  font-size: 14px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cat-count { margin-left: auto; flex: none; font-size: 12.5px; opacity: 0.75; }
 
 /* ---------- 목록 헤더 ---------- */
 .list-head {
@@ -555,9 +564,16 @@ a:focus-visible {
   flex-direction: column;
   gap: 14px;
   max-height: 90vh;
-  max-height: 90dvh;
+  /* --vvh 는 hooks.js 의 useVisualViewport 가 넣는 "키보드를 뺀 실제 보이는 높이".
+     없으면 90dvh 로 떨어진다. */
+  max-height: min(90dvh, calc(var(--vvh, 100dvh) - 24px));
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+/* 포커스가 옮겨갈 때 브라우저가 스크롤로 끌어올리는데, 딱 붙지 않게 여유를 준다 */
+.field input, .field textarea, .field select {
+  scroll-margin-top: 20px;
+  scroll-margin-bottom: 20px;
 }
 .modal-head { display: flex; align-items: center; justify-content: space-between; }
 .modal-head h2 { margin: 0; font-size: 17px; }
@@ -663,6 +679,46 @@ a:focus-visible {
   padding: 8px 0;
   outline: none;
   font-size: 14px;
+}
+
+.quick-hint {
+  display: none;
+  margin: -6px 0 10px;
+  padding: 0 2px;
+  font-size: 12.5px;
+  color: var(--ink-faint);
+}
+.quick-row:focus-within + .quick-hint { display: block; }
+
+/* 백업/복원 진행 표시. ⋯ 메뉴를 닫으면 버튼 안 진행 문구가 안 보여서 따로 띄운다. */
+.busy-pill {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  /* 토스트와 같은 자리에 겹치지 않게 한 칸 위로 */
+  bottom: calc(72px + env(safe-area-inset-bottom));
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: var(--shadow-menu);
+}
+.busy-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--bg);
+  animation: busy-blink 1s ease-in-out infinite;
+}
+@keyframes busy-blink { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) {
+  .busy-dot { animation: none; }
 }
 
 .link-mini {
@@ -1204,7 +1260,7 @@ a.card-thumb { cursor: pointer; }
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, var(--surface), transparent);
+  background: linear-gradient(90deg, transparent, var(--skel-sweep), transparent);
   opacity: 0.55;
   animation: skel-sweep 1.25s ease-in-out infinite;
 }
@@ -1364,9 +1420,68 @@ a.card-thumb { cursor: pointer; }
 
   .today-row, .trash-row { padding: 11px 0; }
 
-  /* 마인드맵은 가로 스크롤이 되는 캔버스다. 축소돼도 글자가 읽히게 키운다. */
+  /* 입력 글꼴 16px 규칙이 element 선택자라, 클래스로 크기를 지정한 입력칸들은
+     특이도에서 이겨 14px/13px 로 남아 있었다 = iOS 에서 포커스 때 여전히 확대됐다.
+     (.search-box input / .field input / .login-card input 은 크기 지정이 없어 이미 16px 였다) */
+  .cm-name,
+  .cm-add input,
+  .cm-parent select,
+  .due-row input[type="date"],
+  .mm-input,
+  .mm-empty-add input { font-size: 16px; }
+
+  /* 터치 대상 최소 44px. 버튼은 내용을 세로 가운데로 맞추므로 min-height 만으로 충분하다.
+     보이는 크기(글꼴·여백)는 건드리지 않는다. */
+  .btn-primary, .btn-ghost, .btn-danger, .btn-sm,
+  .chip, .tab, .view-toggle button, .trash-link, .cat-manage, .more-toggle {
+    min-height: 44px;
+  }
+  /* 위아래 화살표는 폭도 좁았다 */
+  .slot-move button { min-width: 44px; }
+  /* 아이콘 버튼 34px -> 40px (옆 이름 입력칸과 줄을 맞춘다) */
+  .cm-icon { width: 40px; height: 40px; }
+  /* 입력칸도 눌러서 커서를 놓는 대상이다 */
+  .cm-name, .cm-add input, .quick-row input { min-height: 44px; }
+
+  /* 색 점 8개는 한 줄에 들어가야 해서 44px 를 줄 수 없다.
+     26 -> 30px 로 키우고 간격을 좁혀 8*30 + 7*6 = 282px 로 맞췄다 (여유 폭 311px). */
+  .cm-dot { width: 30px; height: 30px; }
+  .cm-colors { gap: 6px; }
+
+  /* 별표 / 태그도 세로 44px 급으로. 가로는 옆 요소를 덮지 않는 선에서만 넓힌다. */
+  .star::after { inset: -15px -8px; }
+  .tag-mini::after { inset: -13px -6px; }
+  .slot-gear::after { inset: -16px; }
+
+  /* 체크박스: 20px 은 손가락으로 누르기 작다. 모바일에서는 눈에 보이는 크기도 키우고
+     히트 영역을 44x44 로 맞춘다. */
+  .check { width: 24px; height: 24px; }
+  /* 세로는 44px 를 채우되, 가로로는 옆 제목 버튼을 덮지 않도록 (card-top gap 이 6px) */
+  .check::after { inset: -10px -6px; }
+
+  /* 모달을 위쪽에 붙인다. 세로 가운데 정렬이면 키보드가 올라올 때
+     모달 윗부분이 화면 밖으로 밀려 제목 입력칸이 보이지 않는다. */
+  .modal-backdrop { align-items: start; padding-top: 12px; }
+  /* 내용 입력칸이 화면 절반을 먹지 않게 */
+  /* 링크 칸(.link-input)은 스스로 높이를 늘리고 overflow:hidden 이라 제외한다 —
+     상한을 걸면 링크가 잘려 보이지 않는다 */
+  .field textarea:not(.link-input) { max-height: 38dvh; }
+
+    /* 마인드맵은 가로 스크롤이 되는 캔버스다. 축소돼도 글자가 읽히게 키운다. */
   .mm-label { font-size: 16px; }
   .mm-count { font-size: 13px; }
   .mm-center-text { font-size: 16px; }
   .mm-add-sign { font-size: 19px; }
+}
+
+/* =========================================================
+   아주 좁은 화면 (375px 급) — 갤러리를 1열로
+   375px 에서 2열이면 카드 폭이 166px, 체크·별표를 뺀 제목 자리가 87px 밖에 안 된다.
+   (한글 6자 남짓) 1열로 바꾸면 273px 로 늘어난다. 촘촘히 훑고 싶으면 리스트 보기(☰)가 있다.
+   2열로 되돌리려면 이 블록만 지우면 된다.
+   ========================================================= */
+@media (max-width: 400px) {
+  .item-grid { grid-template-columns: 1fr; }
+  /* 카드가 넓어졌으니 썸네일도 그에 맞게 */
+  .item-grid .card-thumb img { height: 150px; }
 }

@@ -8,9 +8,11 @@ import Login from './components/Login.jsx'
 import Archive from './components/Archive.jsx'
 import Pricing from './components/Pricing.jsx'
 import { useToast } from './components/Toast.jsx'
+import { useVisualViewport } from './hooks.js'
 
 export default function App() {
   const toast = useToast()
+  useVisualViewport()
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
   const [path, setPath] = useState(() => window.location.pathname)

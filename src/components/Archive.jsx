@@ -534,11 +534,13 @@ export default function Archive({ session, onNavigate }) {
         <input
           value={quickText}
           onChange={(e) => setQuickText(e.target.value)}
-          placeholder="빠른 저장: 입력 후 엔터 (!로 시작하면 할 것으로 저장)"
+          placeholder="빠른 저장 — 입력 후 엔터"
           aria-label="빠른 저장"
         />
         <button type="submit" className="btn-primary btn-sm" disabled={quickBusy || !quickText.trim()}>저장</button>
       </form>
+      {/* 좁은 화면에서는 placeholder 에 다 담기지 않아, 입력 중에만 힌트를 보여 준다 */}
+      <p className="quick-hint">!로 시작하면 &lsquo;할 것&rsquo;으로 저장돼요</p>
 
       {tab === 'today' && (
         <Today
@@ -701,6 +703,13 @@ export default function Archive({ session, onNavigate }) {
           onClose={() => setBulkOpen(false)}
           onSaved={() => { setBulkOpen(false); refresh() }}
         />
+      )}
+
+      {(exporting || importStep !== null) && (
+        <div className="busy-pill" role="status">
+          <span className="busy-dot" aria-hidden="true" />
+          {exporting ? '백업을 만드는 중...' : `복원 중 (${importStep}/3)`}
+        </div>
       )}
 
       {settingsOpen && (
