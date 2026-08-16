@@ -151,6 +151,23 @@ export default function Archive({ session }) {
     }
   }
 
+  // 마인드맵 노드의 + 버튼에서 호출. 색상은 부모에서 물려받는다.
+  async function addCategory(parentId, name) {
+    const clean = name.trim()
+    if (!clean) return
+    const parent = parentId ? categories.find((c) => c.id === parentId) : null
+    const position = categories.reduce((max, c) => Math.max(max, c.position ?? 0), 0) + 1
+    const { error } = await supabase.from('categories').insert({
+      name: clean,
+      icon: '📁',
+      color: parent?.color ?? 'gray',
+      parent_id: parentId ?? null,
+      position,
+      user_id: session.user.id
+    })
+    if (!error) loadCategories()
+  }
+
   const filterActive = categoryId || activeTag || starredOnly || statusFilter || debounced
 
   return (
@@ -264,6 +281,7 @@ export default function Archive({ session }) {
           categories={categories}
           counts={counts}
           onSelect={(id) => { setCategoryId(id); setView('grid') }}
+          onAdd={addCategory}
         />
       ) : loading && items.length === 0 ? (
         <div className="center-block"><div className="spinner" aria-label="불러오는 중" /></div>

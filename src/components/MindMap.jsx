@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { childrenOf } from '../supabase.js'
 
 const W = 760
@@ -7,15 +7,29 @@ const CX = W / 2
 const CY = H / 2
 const R_ROOT = 168
 const R_CHILD = 268
+const R_CENTER = 52
+
+const INPUT_W = 168
+const INPUT_H = 34
+
+// addingFor 는 3상태: undefined = 닫힘, null = 중앙(최상위 추가), 문자열 = 해당 노드 id
+const CLOSED = undefined
 
 function polar(angle, radius) {
   return { x: CX + Math.cos(angle) * radius, y: CY + Math.sin(angle) * radius }
 }
 
-export default function MindMap({ categories, counts, onSelect }) {
+function nodeSize(depth) {
+  return depth === 1 ? { w: 124, h: 46 } : { w: 104, h: 38 }
+}
+
+export default function MindMap({ categories, counts, onSelect, onAdd }) {
+  const [addingFor, setAddingFor] = useState(CLOSED)
+  const [draft, setDraft] = useState('')
+
   const nodes = useMemo(() => {
     const roots = childrenOf(categories, null)
-    if (roots.length === 0) return { roots: [], edges: [] }
+    if (roots.length === 0) return { laid: [], edges: [] }
 
     const laid = []
     const edges = []
@@ -47,14 +61,82 @@ export default function MindMap({ categories, counts, onSelect }) {
       }
     })
 
-    return { roots: laid, edges }
+    return { laid, edges }
   }, [categories])
+
+  function openAdd(e, id) {
+    e.stopPropagation()
+    setDraft('')
+    setAddingFor(id)
+  }
+
+  function closeAdd() {
+    setAddingFor(CLOSED)
+    setDraft('')
+  }
+
+  function submitAdd() {
+    const clean = draft.trim()
+    if (!clean) { closeAdd(); return }
+    onAdd(addingFor ?? null, clean)
+    closeAdd()
+  }
+
+  // 입력창을 띄울 좌표. 노드 아래쪽에 붙이되 캔버스를 벗어나지 않게 자른다.
+  const inputPos = useMemo(() => {
+    if (addingFor === CLOSED) return null
+    if (addingFor === null) return { x: CX - INPUT_W / 2, y: CY + R_CENTER + 8 }
+    const n = nodes.laid.find((it) => it.cat.id === addingFor)
+    if (!n) return null
+    const { h } = nodeSize(n.depth)
+    return {
+      x: Math.max(4, Math.min(W - INPUT_W - 4, n.x - INPUT_W / 2)),
+      y: Math.min(H - INPUT_H - 4, n.y + h / 2 + 6)
+    }
+  }, [addingFor, nodes])
 
   if (categories.length === 0) {
     return (
       <div className="empty">
-        <p>카테고리가 없어요. ⚙️ 에서 먼저 만들어 보세요.</p>
+        <p>카테고리가 없어요. 아래에서 첫 카테고리를 만들어 보세요.</p>
+        <button className="btn-primary" onClick={() => { setDraft(''); setAddingFor(null) }}>
+          + 최상위 카테고리
+        </button>
+        {addingFor === null && (
+          <form
+            className="mm-empty-add"
+            onSubmit={(e) => { e.preventDefault(); submitAdd() }}
+          >
+            <input
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Escape') closeAdd() }}
+              placeholder="하위 카테고리 이름"
+              aria-label="새 카테고리 이름"
+            />
+          </form>
+        )}
       </div>
+    )
+  }
+
+  function AddButton({ cx, cy, id, label }) {
+    return (
+      <g
+        className="mm-add"
+        onClick={(e) => openAdd(e, id)}
+        onMouseDown={(e) => e.stopPropagation()}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); openAdd(e, id) }
+        }}
+        aria-label={label}
+      >
+        <circle className="mm-add-dot" cx={cx} cy={cy} r={8} />
+        <text className="mm-add-sign" x={cx} y={cy + 3.5} textAnchor="middle">+</text>
+      </g>
     )
   }
 
@@ -75,56 +157,99 @@ export default function MindMap({ categories, counts, onSelect }) {
           />
         ))}
 
-        <g
-          className="mm-node"
-          onClick={() => onSelect(null)}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') onSelect(null) }}
-          aria-label="전체 보기"
-        >
-          <circle className="mm-center" cx={CX} cy={CY} r={52} />
-          <text className="mm-center-text" x={CX} y={CY - 3} textAnchor="middle">나의</text>
-          <text className="mm-center-text" x={CX} y={CY + 13} textAnchor="middle">아카이브</text>
+        {/* 입력 중 바깥을 누르면 취소 */}
+        {addingFor !== CLOSED && (
+          <rect
+            className="mm-backdrop"
+            x={0} y={0} width={W} height={H}
+            onMouseDown={closeAdd}
+          />
+        )}
+
+        <g className="mm-node">
+          <g
+            onClick={() => onSelect(null)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') onSelect(null) }}
+            aria-label="전체 보기"
+          >
+            <circle className="mm-center" cx={CX} cy={CY} r={R_CENTER} />
+            <text className="mm-center-text" x={CX} y={CY - 3} textAnchor="middle">나의</text>
+            <text className="mm-center-text" x={CX} y={CY + 13} textAnchor="middle">아카이브</text>
+          </g>
+          <AddButton cx={CX + 37} cy={CY - 37} id={null} label="최상위 카테고리 추가" />
         </g>
 
-        {nodes.roots.map((n) => {
-          const w = n.depth === 1 ? 124 : 104
-          const h = n.depth === 1 ? 46 : 38
+        {nodes.laid.map((n) => {
+          const { w, h } = nodeSize(n.depth)
           const color = n.cat.color ?? 'gray'
           const label = n.cat.name.length > 7 ? `${n.cat.name.slice(0, 7)}…` : n.cat.name
           return (
-            <g
-              key={n.cat.id}
-              className="mm-node"
-              onClick={() => onSelect(n.cat.id)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') onSelect(n.cat.id) }}
-              aria-label={`${n.cat.name} ${counts[n.cat.id] ?? 0}개`}
-            >
-              <rect
-                className={`mm-box mm-fill-${color}`}
-                x={n.x - w / 2} y={n.y - h / 2}
-                width={w} height={h} rx={11}
+            <g key={n.cat.id} className="mm-node">
+              <g
+                onClick={() => onSelect(n.cat.id)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') onSelect(n.cat.id) }}
+                aria-label={`${n.cat.name} ${counts[n.cat.id] ?? 0}개`}
+              >
+                <rect
+                  className={`mm-box mm-fill-${color}`}
+                  x={n.x - w / 2} y={n.y - h / 2}
+                  width={w} height={h} rx={11}
+                />
+                <text
+                  className={`mm-label mm-text-${color}`}
+                  x={n.x} y={n.y - (n.depth === 1 ? 3 : 1)}
+                  textAnchor="middle"
+                >
+                  {n.cat.icon} {label}
+                </text>
+                <text
+                  className={`mm-count mm-text-${color}`}
+                  x={n.x} y={n.y + (n.depth === 1 ? 14 : 12)}
+                  textAnchor="middle"
+                >
+                  {counts[n.cat.id] ?? 0}개{n.extra > 0 ? ` +${n.extra}` : ''}
+                </text>
+              </g>
+              <AddButton
+                cx={n.x + w / 2}
+                cy={n.y - h / 2}
+                id={n.cat.id}
+                label={`${n.cat.name} 하위 카테고리 추가`}
               />
-              <text
-                className={`mm-label mm-text-${color}`}
-                x={n.x} y={n.y - (n.depth === 1 ? 3 : 1)}
-                textAnchor="middle"
-              >
-                {n.cat.icon} {label}
-              </text>
-              <text
-                className={`mm-count mm-text-${color}`}
-                x={n.x} y={n.y + (n.depth === 1 ? 14 : 12)}
-                textAnchor="middle"
-              >
-                {counts[n.cat.id] ?? 0}개{n.extra > 0 ? ` +${n.extra}` : ''}
-              </text>
             </g>
           )
         })}
+
+        {inputPos && (
+          <foreignObject
+            x={inputPos.x} y={inputPos.y}
+            width={INPUT_W} height={INPUT_H}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <form
+              className="mm-input-wrap"
+              onSubmit={(e) => { e.preventDefault(); submitAdd() }}
+            >
+              <input
+                className="mm-input"
+                autoFocus
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  e.stopPropagation()
+                  if (e.key === 'Escape') closeAdd()
+                }}
+                placeholder="하위 카테고리 이름"
+                aria-label="하위 카테고리 이름"
+              />
+            </form>
+          </foreignObject>
+        )}
       </svg>
     </div>
   )

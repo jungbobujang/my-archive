@@ -672,3 +672,46 @@ a.card-thumb { cursor: pointer; }
 .mm-stroke-amber  { stroke: var(--c-amber-mid); }
 .mm-stroke-pink   { stroke: var(--c-pink-mid); }
 .mm-stroke-green  { stroke: var(--c-green-mid); }
+
+/* ---------- 마인드맵 인라인 추가 ---------- */
+.mm-backdrop { fill: transparent; }
+
+.mm-add { cursor: pointer; opacity: 0; transition: opacity 0.12s ease; }
+.mm-node:hover .mm-add,
+.mm-node:focus-within .mm-add,
+.mm-add:focus-visible { opacity: 1; }
+/* 터치 기기는 호버가 없으므로 항상 노출 */
+@media (hover: none) {
+  .mm-add { opacity: 1; }
+}
+.mm-add-dot { fill: var(--ink); }
+.mm-add:hover .mm-add-dot { fill: var(--accent); }
+.mm-add-sign {
+  fill: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.mm-input-wrap { margin: 0; }
+.mm-input {
+  width: 100%;
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: #fff;
+  color: var(--ink);
+  outline: none;
+  box-shadow: none;
+}
+
+.mm-empty-add { margin-top: 10px; }
+.mm-empty-add input {
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: #fff;
+  outline: none;
+}
