@@ -588,3 +588,87 @@ a.card-thumb { cursor: pointer; }
   font-size: 14px;
 }
 .cm-add input:focus { border-color: var(--accent); outline: none; }
+
+/* ---------- 상위 카테고리 선택 ---------- */
+.cm-parent { margin: 8px 0 0 42px; }
+.cm-parent label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.cm-parent select {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 5px 8px;
+}
+.cm-parent select:focus { border-color: var(--accent); outline: none; }
+
+/* ---------- 마인드맵 ---------- */
+.mindmap-wrap {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 8px;
+  overflow-x: auto;
+}
+.mindmap { width: 100%; height: auto; display: block; min-width: 520px; }
+
+.mm-edge { stroke-width: 2; opacity: 0.5; fill: none; }
+.mm-node { cursor: pointer; }
+.mm-node:hover .mm-box { stroke: var(--ink); stroke-width: 2; }
+.mm-node:hover .mm-center { stroke: var(--ink); stroke-width: 2; }
+.mm-node:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.mm-box { stroke: transparent; stroke-width: 2; }
+.mm-center { fill: var(--ink); }
+.mm-center-text {
+  fill: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  pointer-events: none;
+}
+.mm-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.mm-count {
+  font-size: 10.5px;
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.mm-fill-purple { fill: var(--c-purple-bg); }
+.mm-fill-coral  { fill: var(--c-coral-bg); }
+.mm-fill-teal   { fill: var(--c-teal-bg); }
+.mm-fill-gray   { fill: var(--c-gray-bg); }
+.mm-fill-blue   { fill: var(--c-blue-bg); }
+.mm-fill-amber  { fill: var(--c-amber-bg); }
+.mm-fill-pink   { fill: var(--c-pink-bg); }
+.mm-fill-green  { fill: var(--c-green-bg); }
+
+.mm-text-purple { fill: var(--c-purple-fg); }
+.mm-text-coral  { fill: var(--c-coral-fg); }
+.mm-text-teal   { fill: var(--c-teal-fg); }
+.mm-text-gray   { fill: var(--c-gray-fg); }
+.mm-text-blue   { fill: var(--c-blue-fg); }
+.mm-text-amber  { fill: var(--c-amber-fg); }
+.mm-text-pink   { fill: var(--c-pink-fg); }
+.mm-text-green  { fill: var(--c-green-fg); }
+
+.mm-stroke-purple { stroke: var(--c-purple-mid); }
+.mm-stroke-coral  { stroke: var(--c-coral-mid); }
+.mm-stroke-teal   { stroke: var(--c-teal-mid); }
+.mm-stroke-gray   { stroke: var(--c-gray-mid); }
+.mm-stroke-blue   { stroke: var(--c-blue-mid); }
+.mm-stroke-amber  { stroke: var(--c-amber-mid); }
+.mm-stroke-pink   { stroke: var(--c-pink-mid); }
+.mm-stroke-green  { stroke: var(--c-green-mid); }

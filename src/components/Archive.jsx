@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { supabase, PAGE_SIZE } from '../supabase.js'
+import { supabase, PAGE_SIZE, subtreeIds, childrenOf } from '../supabase.js'
 import ItemModal from './ItemModal.jsx'
 import ItemCard from './ItemCard.jsx'
 import CategoryManager from './CategoryManager.jsx'
+import MindMap from './MindMap.jsx'
 
 export default function Archive({ session }) {
   const [items, setItems] = useState([])
@@ -43,13 +44,13 @@ export default function Archive({ session }) {
       .from('items')
       .select('*', withCount ? { count: 'exact' } : undefined)
       .order('created_at', { ascending: false })
-    if (categoryId) q = q.eq('category_id', categoryId)
+    if (categoryId) q = q.in('category_id', subtreeIds(categories, categoryId))
     if (activeTag) q = q.contains('tags', [activeTag])
     if (starredOnly) q = q.eq('starred', true)
     if (statusFilter) q = q.eq('status', statusFilter)
     if (debounced) q = q.or(`title.ilike.%${debounced}%,content.ilike.%${debounced}%`)
     return q
-  }, [categoryId, activeTag, starredOnly, statusFilter, debounced])
+  }, [categoryId, categories, activeTag, starredOnly, statusFilter, debounced])
 
   const loadPage = useCallback(async (page) => {
     setLoading(true)
@@ -95,6 +96,14 @@ export default function Archive({ session }) {
     loadPage(0)
     loadCounts()
   }, [loadPage, loadCounts])
+
+  const rootCategories = useMemo(() => childrenOf(categories, null), [categories])
+
+  // 최상위 카드에는 자기 + 모든 자손의 항목 수 합계를 보여준다
+  const subtreeCount = useCallback(
+    (id) => subtreeIds(categories, id).reduce((sum, cid) => sum + (counts[cid] ?? 0), 0),
+    [categories, counts]
+  )
 
   const recentTags = useMemo(() => {
     const seen = []
@@ -202,7 +211,7 @@ export default function Archive({ session }) {
       )}
 
       <div className="category-grid">
-        {categories.map((c) => (
+        {rootCategories.map((c) => (
           <button
             key={c.id}
             className={`cat-card cat-${c.color} ${categoryId === c.id ? 'cat-on' : ''}`}
@@ -210,7 +219,7 @@ export default function Archive({ session }) {
           >
             <span className="cat-icon" aria-hidden="true">{c.icon}</span>
             <span className="cat-label">{c.name}</span>
-            <span className="cat-count">{counts[c.id] ?? 0}개</span>
+            <span className="cat-count">{subtreeCount(c.id)}개</span>
           </button>
         ))}
         <button
@@ -242,10 +251,21 @@ export default function Archive({ session }) {
             onClick={() => setView('list')}
             aria-label="리스트 보기"
           >☰</button>
+          <button
+            className={view === 'map' ? 'vt-on' : ''}
+            onClick={() => setView('map')}
+            aria-label="마인드맵 보기"
+          >🗺️</button>
         </div>
       </div>
 
-      {loading && items.length === 0 ? (
+      {view === 'map' ? (
+        <MindMap
+          categories={categories}
+          counts={counts}
+          onSelect={(id) => { setCategoryId(id); setView('grid') }}
+        />
+      ) : loading && items.length === 0 ? (
         <div className="center-block"><div className="spinner" aria-label="불러오는 중" /></div>
       ) : items.length === 0 ? (
         <div className="empty">
@@ -271,7 +291,7 @@ export default function Archive({ session }) {
         </div>
       )}
 
-      {hasMore && !loading && (
+      {hasMore && !loading && view !== 'map' && (
         <div className="center-block">
           <button className="btn-ghost" onClick={() => loadPage(pageRef.current + 1)}>더 보기</button>
         </div>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { supabase, COLOR_KEYS, ICON_CHOICES } from '../supabase.js'
+import { supabase, COLOR_KEYS, ICON_CHOICES, subtreeIds } from '../supabase.js'
 
 export default function CategoryManager({ categories, userId, onClose, onChanged }) {
   const [rows, setRows] = useState(categories)
@@ -51,6 +51,18 @@ export default function CategoryManager({ categories, userId, onClose, onChanged
     await persist(cat.id, { color })
   }
 
+  async function handleParent(cat, value) {
+    const parentId = value || null
+    patchLocal(cat.id, { parent_id: parentId })
+    await persist(cat.id, { parent_id: parentId })
+  }
+
+  // 자기 자신과 자손은 상위로 지정할 수 없다 (순환 방지)
+  function parentOptions(cat) {
+    const blocked = new Set(subtreeIds(rows, cat.id))
+    return rows.filter((c) => !blocked.has(c.id))
+  }
+
   async function handleDelete(cat) {
     if (!window.confirm('이 카테고리를 삭제할까요? 소속 항목들은 미분류로 남습니다')) return
     setBusy(true)
@@ -72,7 +84,7 @@ export default function CategoryManager({ categories, userId, onClose, onChanged
     const position = rows.reduce((max, c) => Math.max(max, c.position ?? 0), 0) + 1
     const { data, error: err } = await supabase
       .from('categories')
-      .insert({ name: clean, icon: '📁', color: 'gray', position, user_id: userId })
+      .insert({ name: clean, icon: '📁', color: 'gray', position, parent_id: null, user_id: userId })
       .select()
       .single()
     setBusy(false)
@@ -136,6 +148,21 @@ export default function CategoryManager({ categories, userId, onClose, onChanged
                   ))}
                 </div>
               )}
+
+              <div className="cm-parent">
+                <label>
+                  상위
+                  <select
+                    value={cat.parent_id ?? ''}
+                    onChange={(e) => handleParent(cat, e.target.value)}
+                  >
+                    <option value="">(없음 · 최상위)</option>
+                    {parentOptions(cat).map((p) => (
+                      <option key={p.id} value={p.id}>{p.icon} {p.name}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
 
               <div className="cm-colors" role="group" aria-label={`${cat.name} 색상`}>
                 {COLOR_KEYS.map((col) => (

@@ -11,6 +11,26 @@ export const ICON_CHOICES = ['💡', '🎬', '🖼️', '📝', '📚', '🏋️
 export const PAGE_SIZE = 24
 export const BUCKET = 'archive-images'
 
+// 자기 자신 + 모든 자손의 id. 순환 참조가 있어도 방문 집합으로 멈춘다.
+export function subtreeIds(categories, rootId) {
+  if (!rootId) return []
+  const ids = [rootId]
+  const seen = new Set([rootId])
+  for (let i = 0; i < ids.length; i++) {
+    for (const c of categories) {
+      if (c.parent_id === ids[i] && !seen.has(c.id)) {
+        seen.add(c.id)
+        ids.push(c.id)
+      }
+    }
+  }
+  return ids
+}
+
+export function childrenOf(categories, parentId) {
+  return categories.filter((c) => (c.parent_id ?? null) === parentId)
+}
+
 export function extractUrl(text) {
   if (!text) return null
   const m = text.match(/https?:\/\/[^\s"'<>]+/)
