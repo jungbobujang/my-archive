@@ -32,7 +32,7 @@ export default function Archive({ session, onNavigate }) {
   const [exporting, setExporting] = useState(false)
   const [trashCount, setTrashCount] = useState(0)
   const [trashOpen, setTrashOpen] = useState(false)
-  const [importStep, setImportStep] = useState(null) // null | 1 | 2 | 3
+  const [importStep, setImportStep] = useState(null) // null | 1..4 (복원 단계)
   const fileRef = useRef(null)
 
   const [search, setSearch] = useState('')
@@ -304,9 +304,10 @@ export default function Archive({ session, onNavigate }) {
   async function exportBackup() {
     setExporting(true)
     try {
-      const [allItems, allCategories, allLinks] = [
+      const [allItems, allCategories, allSlots, allLinks] = [
         await fetchAllRows('items'),
         await fetchAllRows('categories'),
+        await fetchAllRows('time_slots'),
         await fetchAllRows('item_categories')
       ]
 
@@ -314,6 +315,7 @@ export default function Archive({ session, onNavigate }) {
         exported_at: new Date().toISOString(),
         items: allItems,
         categories: allCategories,
+        time_slots: allSlots,
         item_categories: allLinks
       }
 
@@ -372,8 +374,13 @@ export default function Archive({ session, onNavigate }) {
       return
     }
 
+    // time_slots 는 나중에 추가된 항목이라 옛 백업에는 없다. 없으면 그냥 건너뛴다.
+    const backupSlots = Array.isArray(backup.time_slots) ? backup.time_slots : []
+
     const proceed = window.confirm(
-      `백업의 항목 ${backup.items.length}개, 카테고리 ${backup.categories.length}개를 가져올까요? `
+      `백업의 항목 ${backup.items.length}개, 카테고리 ${backup.categories.length}개`
+      + (backupSlots.length > 0 ? `, 시간대 ${backupSlots.length}개` : '')
+      + '를 가져올까요? '
       + '기존 데이터는 삭제되지 않고, 같은 id의 데이터는 백업 내용으로 덮어써집니다.'
     )
     if (!proceed) return
@@ -381,17 +388,23 @@ export default function Archive({ session, onNavigate }) {
     const uid = session.user.id
     let stage = ''
     try {
-      // 외래키 때문에 categories → items → item_categories 순서를 지켜야 한다
+      // 외래키 순서를 지켜야 한다.
+      // items.category_id -> categories, items.slot_id -> time_slots 라서
+      // 둘 다 items 보다 먼저 들어가야 한다.
       stage = '카테고리'
       setImportStep(1)
       await upsertChunked('categories', backup.categories.map((c) => ({ ...c, user_id: uid })))
 
-      stage = '항목'
+      stage = '시간대'
       setImportStep(2)
+      await upsertChunked('time_slots', backupSlots.map((s) => ({ ...s, user_id: uid })))
+
+      stage = '항목'
+      setImportStep(3)
       await upsertChunked('items', backup.items.map((i) => ({ ...i, user_id: uid })))
 
       stage = '카테고리 소속'
-      setImportStep(3)
+      setImportStep(4)
       await upsertChunked(
         'item_categories',
         backup.item_categories.map((r) => ({
@@ -405,6 +418,7 @@ export default function Archive({ session, onNavigate }) {
       setImportStep(null)
       toast.success(`복원 완료: 항목 ${backup.items.length}개`)
       loadCategories()
+      loadSlots() // 복원된 시간대를 '오늘' 탭이 바로 쓰도록
       refresh()
     } catch (err) {
       console.error(err)
@@ -471,7 +485,7 @@ export default function Archive({ session, onNavigate }) {
               onClick={() => { fileRef.current?.click(); setMenuOpen(false) }}
               disabled={exporting || importStep !== null}
               title="백업 JSON을 불러와 합칩니다 (기존 데이터는 삭제되지 않음)"
-            >{importStep !== null ? `복원 중... (${importStep}/3)` : '📥 가져오기'}</button>
+            >{importStep !== null ? `복원 중... (${importStep}/4)` : '📥 가져오기'}</button>
             <button
               className="btn-ghost"
               onClick={async () => {
@@ -708,7 +722,7 @@ export default function Archive({ session, onNavigate }) {
       {(exporting || importStep !== null) && (
         <div className="busy-pill" role="status">
           <span className="busy-dot" aria-hidden="true" />
-          {exporting ? '백업을 만드는 중...' : `복원 중 (${importStep}/3)`}
+          {exporting ? '백업을 만드는 중...' : `복원 중 (${importStep}/4)`}
         </div>
       )}
 
