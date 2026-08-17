@@ -272,6 +272,21 @@ export default function Archive({ session, onNavigate }) {
     }
   }, [toast])
 
+  // 좌상단 로고 = 홈. 검색·필터를 모두 지우고 기본 탭으로 돌아간 뒤 다시 읽어 온다.
+  const goHome = useCallback(() => {
+    setSearch('')
+    setDebounced('')       // 디바운스가 300ms 뒤에 옛 검색어를 되살리지 않도록 같이 지운다
+    setCategoryId(null)
+    setActiveTag(null)
+    setStarredOnly(false)
+    setStatusFilter(null)
+    setTab('today')
+    setMenuOpen(false)
+    setModalItem(undefined)
+    refresh()
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [refresh])
+
   const openItem = useCallback((item) => setModalItem(item), [])
   const toggleTag = useCallback((t) => setActiveTag((prev) => (prev === t ? null : t)), [])
 
@@ -450,10 +465,16 @@ export default function Archive({ session, onNavigate }) {
   return (
     <div className="archive">
       <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark">A</span>
+        <button
+          type="button"
+          className="brand"
+          onClick={goHome}
+          title="홈으로 (필터 초기화)"
+          aria-label="홈으로. 검색과 필터를 초기화합니다"
+        >
+          <span className="brand-mark" aria-hidden="true">A</span>
           <span className="brand-name">나의 아카이브</span>
-        </div>
+        </button>
         <div className="topbar-actions" ref={menuRef}>
           <button className="btn-primary" onClick={() => setModalItem(null)}>+ 새 항목</button>
           <button

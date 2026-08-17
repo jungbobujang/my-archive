@@ -86,6 +86,14 @@ body {
 button { font: inherit; cursor: pointer; }
 input, textarea { font: inherit; }
 
+/* 버튼 글자는 어떤 폭에서도 세로로 꺾이지 않는다.
+   컨테이너가 좁아지면 글자가 한 자씩 세로로 쌓이는데, 그건 고장으로 보인다.
+   차라리 가로로 넘치게 두고(그러면 바로 눈에 띈다) 줄바꿈만 막는다. */
+.btn-primary, .btn-ghost, .btn-danger, .btn-sm,
+.tab, .more-toggle, .view-toggle button, .trash-link {
+  white-space: nowrap;
+}
+
 .archive {
   max-width: 880px;
   margin: 0 auto;
@@ -99,7 +107,23 @@ input, textarea { font: inherit; }
   justify-content: space-between;
   padding: 8px 0 16px;
 }
-.brand { display: flex; align-items: center; gap: 10px; }
+/* 로고 = 홈 버튼. 폭이 모자라면 버튼들이 아니라 이 쪽이 먼저 줄어든다. */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 0 1 auto;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.brand:hover .brand-name { color: var(--ink-soft); }
+.brand:active { transform: translateY(1px); }
 .brand-mark {
   width: 34px; height: 34px;
   display: grid; place-items: center;
@@ -109,9 +133,25 @@ input, textarea { font: inherit; }
   font-weight: 700;
   font-size: 17px;
   letter-spacing: -0.5px;
+  flex: none;
 }
-.brand-name { font-weight: 700; font-size: 17px; letter-spacing: -0.3px; }
-.topbar-actions { display: flex; align-items: center; gap: 8px; position: relative; }
+.brand-name {
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: -0.3px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 버튼 쪽은 절대 줄어들지 않는다. 줄어들면 글자가 세로로 꺾인다. */
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  flex: none;
+}
 /* 넓은 화면에서는 보조 버튼이 그냥 한 줄로 늘어선다. ⋯ 버튼은 좁은 화면에서만 나타난다. */
 .more-toggle { display: none; }
 .more-menu { display: flex; gap: 8px; }
@@ -155,14 +195,14 @@ input, textarea { font: inherit; }
 /* 색이 바뀌는 컨트롤만 짧게 전환한다. 레이아웃에 영향을 주는 속성은 넣지 않는다. */
 .btn-primary, .btn-ghost, .btn-danger, .chip, .tab, .cat-card, .card,
 .view-toggle button, .check, .star, .cm-icon, .cm-dot, .toast-close,
-.trash-link, .cat-manage, .today-title, .card-title {
+.trash-link, .cat-manage, .today-title, .card-title, .brand-name {
   transition: background-color 0.15s ease, border-color 0.15s ease,
               color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
 }
 @media (prefers-reduced-motion: reduce) {
   .btn-primary, .btn-ghost, .btn-danger, .chip, .tab, .cat-card, .card,
   .view-toggle button, .check, .star, .cm-icon, .cm-dot, .toast-close,
-  .trash-link, .cat-manage, .today-title, .card-title {
+  .trash-link, .cat-manage, .today-title, .card-title, .brand-name {
     transition: none;
   }
   .btn-primary:active, .btn-ghost:active, .btn-danger:active { transform: none; }
