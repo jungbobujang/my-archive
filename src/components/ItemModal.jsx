@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
-import { supabase, BUCKET, extractUrls, youtubeThumb } from '../supabase.js'
+// 항목 생성/수정 모달. 저장은 items 한 줄 + item_categories 를 통째로 갈아끼우는 두 단계다.
+import { useEffect, useState } from 'react'
+import { supabase, BUCKET, extractUrls, parseTags, youtubeThumb, ymd } from '../supabase.js'
+import { useEscapeKey } from '../hooks.js'
 
 // youtu.be/abc123 형태로 줄인다
 function shortenUrl(url) {
@@ -11,10 +13,6 @@ function shortenUrl(url) {
   } catch {
     return url.length > 42 ? `${url.slice(0, 42)}…` : url
   }
-}
-
-function ymd(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 export default function ItemModal({ item, categories, slots, userId, onClose, onSaved }) {
@@ -32,16 +30,11 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   const [preview, setPreview] = useState(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const dialogRef = useRef(null)
 
   // 수정 모드에서 DB에 저장돼 있는 링크 목록
   const savedLinks = extractUrls(item?.link_url ?? '')
 
-  useEffect(() => {
-    function onKey(e) { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  useEscapeKey(onClose)
 
   // 수정 모드: 기존 소속을 item_categories 에서 불러온다
   useEffect(() => {
@@ -63,12 +56,6 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     setPreview(url)
     return () => URL.revokeObjectURL(url)
   }, [file])
-
-  function parseTags(text) {
-    return [...new Set(
-      text.split(',').map((t) => t.trim().replace(/^#/, '')).filter(Boolean)
-    )].slice(0, 10)
-  }
 
   async function handleSave() {
     if (!title.trim()) {
@@ -157,7 +144,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label={isEdit ? '항목 수정' : '새 항목'} ref={dialogRef}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={isEdit ? '항목 수정' : '새 항목'}>
         <div className="modal-head">
           <h2>{isEdit ? '항목 수정' : '새 항목'}</h2>
           <button className="btn-ghost btn-sm" onClick={onClose} aria-label="닫기">✕</button>

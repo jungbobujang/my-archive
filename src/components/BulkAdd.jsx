@@ -1,5 +1,7 @@
+// 링크를 여러 개 붙여넣어 한 번에 저장. 제목은 noembed 로 하나씩 받아온다.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { supabase, extractUrls, fetchLinkTitle, youtubeThumb } from '../supabase.js'
+import { supabase, extractUrls, fetchLinkTitle, parseTags, youtubeThumb } from '../supabase.js'
+import { useEscapeKey } from '../hooks.js'
 
 export default function BulkAdd({ categories, userId, onClose, onSaved }) {
   const [text, setText] = useState('')
@@ -14,19 +16,9 @@ export default function BulkAdd({ categories, userId, onClose, onSaved }) {
 
   const urls = useMemo(() => extractUrls(text), [text])
 
-  useEffect(() => {
-    function onKey(e) { if (e.key === 'Escape' && !busy) onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, busy])
+  useEscapeKey(onClose, !busy)
 
   useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])
-
-  function parseTags(value) {
-    return [...new Set(
-      value.split(',').map((t) => t.trim().replace(/^#/, '')).filter(Boolean)
-    )].slice(0, 10)
-  }
 
   function toggleCategory(id) {
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))

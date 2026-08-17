@@ -1,3 +1,5 @@
+// 카테고리 계층을 방사형 SVG 로 그린다. 2단계까지만 그리고 그 아래는 부모에 +N 으로 접는다.
+// 노드의 + 버튼으로 하위 카테고리를 그 자리에서 추가할 수 있다.
 import { useMemo, useState } from 'react'
 import { childrenOf } from '../supabase.js'
 
@@ -21,6 +23,28 @@ function polar(angle, radius) {
 
 function nodeSize(depth) {
   return depth === 1 ? { w: 124, h: 46 } : { w: 104, h: 38 }
+}
+
+// 노드에 붙는 + 버튼. 컴포넌트 밖에 둬야 렌더마다 새 타입이 되어 다시 마운트되지 않는다.
+function AddButton({ cx, cy, id, label, onOpen }) {
+  return (
+    <g
+      className="mm-add"
+      onClick={(e) => onOpen(e, id)}
+      onMouseDown={(e) => e.stopPropagation()}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); onOpen(e, id) }
+      }}
+      aria-label={label}
+    >
+      {/* 보이지 않는 넓은 터치 영역. SVG 가 축소돼 그려지는 폰에서 점만으로는 누르기 어렵다 */}
+      <circle className="mm-add-hit" cx={cx} cy={cy} r={22} />
+      <circle className="mm-add-dot" cx={cx} cy={cy} r={11} />
+      <text className="mm-add-sign" x={cx} y={cy + 4.5} textAnchor="middle">+</text>
+    </g>
+  )
 }
 
 export default function MindMap({ categories, counts, onSelect, onAdd }) {
@@ -98,7 +122,9 @@ export default function MindMap({ categories, counts, onSelect, onAdd }) {
   if (categories.length === 0) {
     return (
       <div className="empty">
-        <p>카테고리가 없어요. 아래에서 첫 카테고리를 만들어 보세요.</p>
+        <span className="empty-icon" aria-hidden="true">🗺️</span>
+        <p className="empty-title">아직 카테고리가 없어요</p>
+        <p className="empty-sub">최상위 카테고리를 하나 만들면 여기에 지도가 그려집니다.</p>
         <button className="btn-primary" onClick={() => { setDraft(''); setAddingFor(null) }}>
           + 최상위 카테고리
         </button>
@@ -118,25 +144,6 @@ export default function MindMap({ categories, counts, onSelect, onAdd }) {
           </form>
         )}
       </div>
-    )
-  }
-
-  function AddButton({ cx, cy, id, label }) {
-    return (
-      <g
-        className="mm-add"
-        onClick={(e) => openAdd(e, id)}
-        onMouseDown={(e) => e.stopPropagation()}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); openAdd(e, id) }
-        }}
-        aria-label={label}
-      >
-        <circle className="mm-add-dot" cx={cx} cy={cy} r={8} />
-        <text className="mm-add-sign" x={cx} y={cy + 3.5} textAnchor="middle">+</text>
-      </g>
     )
   }
 
@@ -178,7 +185,7 @@ export default function MindMap({ categories, counts, onSelect, onAdd }) {
             <text className="mm-center-text" x={CX} y={CY - 3} textAnchor="middle">나의</text>
             <text className="mm-center-text" x={CX} y={CY + 13} textAnchor="middle">아카이브</text>
           </g>
-          <AddButton cx={CX + 37} cy={CY - 37} id={null} label="최상위 카테고리 추가" />
+          <AddButton cx={CX + 37} cy={CY - 37} id={null} label="최상위 카테고리 추가" onOpen={openAdd} />
         </g>
 
         {nodes.laid.map((n) => {
@@ -219,6 +226,7 @@ export default function MindMap({ categories, counts, onSelect, onAdd }) {
                 cy={n.y - h / 2}
                 id={n.cat.id}
                 label={`${n.cat.name} 하위 카테고리 추가`}
+                onOpen={openAdd}
               />
             </g>
           )

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="나의 아카이브">
+  <!-- scripts/generate-icons.mjs 의 PNG 아이콘과 같은 글리프. 좌표를 고칠 때 둘 다 맞춰야 한다. -->
+  <rect width="100" height="100" rx="22" fill="#22261f"/>
+  <g transform="translate(20 20) scale(0.6)" fill="#f4f4f1">
+    <path d="M42 8 H58 L28 92 H10 Z"/>
+    <path d="M42 8 H58 L90 92 H72 Z"/>
+    <path d="M26 59 H74 V75 H26 Z"/>
+  </g>
+</svg>

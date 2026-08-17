@@ -1,5 +1,9 @@
+// 로그인 후의 메인 화면. '오늘' 탭과 '아카이브' 탭을 함께 들고 있고,
+// 목록 조회·필터·페이지네이션과 모달 열림 상태를 여기서 관리한다.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { supabase, PAGE_SIZE, subtreeIds, childrenOf } from '../supabase.js'
+import { supabase, PAGE_SIZE, subtreeIds, childrenOf, fetchAllRows } from '../supabase.js'
+import { useTheme } from '../theme.js'
+import { useToast } from './Toast.jsx'
 import ItemModal from './ItemModal.jsx'
 import ItemCard from './ItemCard.jsx'
 import CategoryManager from './CategoryManager.jsx'
@@ -7,8 +11,13 @@ import MindMap from './MindMap.jsx'
 import BulkAdd from './BulkAdd.jsx'
 import Today from './Today.jsx'
 import Trash from './Trash.jsx'
+import { SkeletonCards } from './Skeleton.jsx'
+import Settings from './Settings.jsx'
 
-export default function Archive({ session }) {
+// categoryIds 가 없을 때 넘길 고정 빈 배열 (매번 [] 를 새로 만들면 ItemCard 의 memo 가 풀린다)
+const NO_CATEGORIES = []
+
+export default function Archive({ session, onNavigate }) {
   const [items, setItems] = useState([])
   const [itemCats, setItemCats] = useState({}) // item_id -> [category_id]
   const [counts, setCounts] = useState({})
@@ -23,7 +32,7 @@ export default function Archive({ session }) {
   const [exporting, setExporting] = useState(false)
   const [trashCount, setTrashCount] = useState(0)
   const [trashOpen, setTrashOpen] = useState(false)
-  const [importStep, setImportStep] = useState(null) // null | 1 | 2 | 3
+  const [importStep, setImportStep] = useState(null) // null | 1..4 (복원 단계)
   const fileRef = useRef(null)
 
   const [search, setSearch] = useState('')
@@ -42,6 +51,30 @@ export default function Archive({ session }) {
 
   const [modalItem, setModalItem] = useState(undefined) // undefined=닫힘, null=새 항목, 객체=수정
   const pageRef = useRef(0)
+
+  const toast = useToast()
+  const { pref: themePref, setPref: setThemePref } = useTheme()
+  const [settingsOpen, setSettingsOpen] = useState(false)
+
+  // 좁은 화면에서 상단 보조 버튼들을 담는 ⋯ 메뉴 (넓은 화면에서는 CSS 로 그냥 한 줄이 된다)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef(null)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    function onDown(e) {
+      if (!menuRef.current?.contains(e.target)) setMenuOpen(false)
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menuOpen])
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search.trim()), 300)
@@ -78,9 +111,12 @@ export default function Archive({ session }) {
       .from('item_categories')
       .select('item_id')
       .in('category_id', ids)
-    if (error) return []
+    if (error) {
+      toast.error('카테고리 필터를 적용하지 못했어요')
+      return []
+    }
     return [...new Set((data ?? []).map((r) => r.item_id))]
-  }, [categoryId, categories])
+  }, [categoryId, categories, toast])
 
   // 화면에 올라온 항목들의 소속 카테고리를 한 번의 조회로 매핑한다
   const loadItemCats = useCallback(async (itemIds, replace) => {
@@ -92,13 +128,16 @@ export default function Archive({ session }) {
       .from('item_categories')
       .select('item_id, category_id')
       .in('item_id', itemIds)
-    if (error) return
+    if (error) {
+      toast.error('항목의 카테고리 정보를 불러오지 못했어요')
+      return
+    }
     const next = {}
     for (const row of data ?? []) {
       (next[row.item_id] ??= []).push(row.category_id)
     }
     setItemCats((prev) => (replace ? next : { ...prev, ...next }))
-  }, [])
+  }, [toast])
 
   const loadPage = useCallback(async (page) => {
     setLoading(true)
@@ -124,48 +163,37 @@ export default function Archive({ session }) {
       setHasMore(data.length === PAGE_SIZE)
       pageRef.current = page
       await loadItemCats(data.map((i) => i.id), page === 0)
+    } else {
+      toast.error('목록을 불러오지 못했어요. 연결 상태를 확인해 주세요')
     }
     setLoading(false)
-  }, [buildQuery, resolveAllowedIds, loadItemCats])
+  }, [buildQuery, resolveAllowedIds, loadItemCats, toast])
 
   const loadCategories = useCallback(async () => {
     const { data, error } = await supabase
       .from('categories')
       .select('*')
       .order('position', { ascending: true })
-    if (!error) setCategories(data ?? [])
-  }, [])
+    if (error) toast.error('카테고리를 불러오지 못했어요')
+    else setCategories(data ?? [])
+  }, [toast])
 
   const loadSlots = useCallback(async () => {
     const { data, error } = await supabase
       .from('time_slots')
       .select('*')
       .order('position', { ascending: true })
-    if (!error) setSlots(data ?? [])
-  }, [])
-
-  // 상한 없이 끝까지 받는 가벼운 조회
-  const fetchAllLight = useCallback(async (table, columns, tweak) => {
-    const CHUNK = 1000
-    const rows = []
-    for (let from = 0; ; from += CHUNK) {
-      let q = supabase.from(table).select(columns)
-      if (tweak) q = tweak(q)
-      const { data, error } = await q.range(from, from + CHUNK - 1)
-      if (error) throw error
-      rows.push(...(data ?? []))
-      if (!data || data.length < CHUNK) break
-    }
-    return rows
-  }, [])
+    if (error) toast.error('시간대를 불러오지 못했어요')
+    else setSlots(data ?? [])
+  }, [toast])
 
   const loadCounts = useCallback(async () => {
     try {
       // item_categories 에는 deleted_at 이 없어 휴지통 항목이 섞인다.
       // 살아있는 id 를 먼저 모아 걸러낸다.
       const [liveIds, links] = [
-        await fetchAllLight('items', 'id', (q) => q.is('deleted_at', null)),
-        await fetchAllLight('item_categories', 'item_id, category_id')
+        await fetchAllRows('items', 'id', (q) => q.is('deleted_at', null)),
+        await fetchAllRows('item_categories', 'item_id, category_id')
       ]
       const live = new Set(liveIds.map((r) => r.id))
       const next = {}
@@ -176,6 +204,7 @@ export default function Archive({ session }) {
       setCounts(next)
     } catch (err) {
       console.error(err)
+      toast.error('카테고리별 개수를 세지 못했어요')
     }
 
     const { count: tc } = await supabase
@@ -187,7 +216,7 @@ export default function Archive({ session }) {
       .from('items').select('id', { count: 'exact', head: true })
       .not('deleted_at', 'is', null)
     setTrashCount(trash ?? 0)
-  }, [categories, fetchAllLight])
+  }, [categories, toast])
 
   useEffect(() => { loadCategories() }, [loadCategories])
   useEffect(() => { loadSlots() }, [loadSlots])
@@ -219,17 +248,47 @@ export default function Archive({ session }) {
     return seen
   }, [items])
 
-  async function toggleStar(item) {
-    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, starred: !i.starred } : i)))
-    await supabase.from('items').update({ starred: !item.starred }).eq('id', item.id)
-  }
+  // 화면을 먼저 바꾸고 저장한다. 실패하면 되돌리고 알린다.
+  // useCallback 인 이유: ItemCard 가 memo 라 콜백 참조가 매번 바뀌면 의미가 없다.
+  const toggleStar = useCallback(async (item) => {
+    const next = !item.starred
+    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, starred: next } : i)))
+    const { error } = await supabase.from('items').update({ starred: next }).eq('id', item.id)
+    if (error) {
+      setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, starred: !next } : i)))
+      toast.error('중요 표시를 저장하지 못했어요')
+    }
+  }, [toast])
 
-  async function toggleDone(item) {
+  const toggleDone = useCallback(async (item) => {
     const next = item.status === 'done' ? 'todo' : 'done'
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, status: next } : i)))
     setTodoCount((c) => Math.max(0, next === 'done' ? c - 1 : c + 1))
-    await supabase.from('items').update({ status: next }).eq('id', item.id)
-  }
+    const { error } = await supabase.from('items').update({ status: next }).eq('id', item.id)
+    if (error) {
+      setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, status: item.status } : i)))
+      setTodoCount((c) => Math.max(0, next === 'done' ? c + 1 : c - 1))
+      toast.error('완료 상태를 저장하지 못했어요')
+    }
+  }, [toast])
+
+  // 좌상단 로고 = 홈. 검색·필터를 모두 지우고 기본 탭으로 돌아간 뒤 다시 읽어 온다.
+  const goHome = useCallback(() => {
+    setSearch('')
+    setDebounced('')       // 디바운스가 300ms 뒤에 옛 검색어를 되살리지 않도록 같이 지운다
+    setCategoryId(null)
+    setActiveTag(null)
+    setStarredOnly(false)
+    setStatusFilter(null)
+    setTab('today')
+    setMenuOpen(false)
+    setModalItem(undefined)
+    refresh()
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [refresh])
+
+  const openItem = useCallback((item) => setModalItem(item), [])
+  const toggleTag = useCallback((t) => setActiveTag((prev) => (prev === t ? null : t)), [])
 
   async function quickSave(e) {
     e.preventDefault()
@@ -248,41 +307,30 @@ export default function Archive({ session }) {
       user_id: session.user.id
     })
     setQuickBusy(false)
-    if (!error) {
-      setQuickText('')
-      refresh()
+    if (error) {
+      toast.error('저장하지 못했어요. 연결 상태를 확인해 주세요')
+      return
     }
-  }
-
-  // PostgREST 는 한 번에 돌려주는 행 수에 상한이 있어 끝까지 나눠 받는다
-  async function fetchAll(table) {
-    const CHUNK = 1000
-    const rows = []
-    for (let from = 0; ; from += CHUNK) {
-      const { data, error } = await supabase
-        .from(table)
-        .select('*')
-        .range(from, from + CHUNK - 1)
-      if (error) throw error
-      rows.push(...(data ?? []))
-      if (!data || data.length < CHUNK) break
-    }
-    return rows
+    setQuickText('')
+    toast.success(isTodo ? '할 것으로 저장했어요' : '저장했어요')
+    refresh()
   }
 
   async function exportBackup() {
     setExporting(true)
     try {
-      const [allItems, allCategories, allLinks] = [
-        await fetchAll('items'),
-        await fetchAll('categories'),
-        await fetchAll('item_categories')
+      const [allItems, allCategories, allSlots, allLinks] = [
+        await fetchAllRows('items'),
+        await fetchAllRows('categories'),
+        await fetchAllRows('time_slots'),
+        await fetchAllRows('item_categories')
       ]
 
       const payload = {
         exported_at: new Date().toISOString(),
         items: allItems,
         categories: allCategories,
+        time_slots: allSlots,
         item_categories: allLinks
       }
 
@@ -298,9 +346,10 @@ export default function Archive({ session }) {
       a.click()
       a.remove()
       URL.revokeObjectURL(url)
+      toast.success(`백업 파일을 내려받았어요 (항목 ${allItems.length}개)`)
     } catch (err) {
       console.error(err)
-      alert('백업에 실패했어요. 네트워크 상태를 확인하고 다시 시도해 주세요.')
+      toast.error('백업에 실패했어요. 연결 상태를 확인하고 다시 시도해 주세요')
     } finally {
       setExporting(false)
     }
@@ -327,7 +376,7 @@ export default function Archive({ session }) {
     try {
       backup = JSON.parse(await file.text())
     } catch {
-      alert('올바른 백업 파일이 아니에요')
+      toast.error('읽을 수 없는 파일이에요. JSON 백업 파일인지 확인해 주세요')
       return
     }
 
@@ -336,12 +385,17 @@ export default function Archive({ session }) {
       && Array.isArray(backup.categories)
       && Array.isArray(backup.item_categories)
     if (!ok) {
-      alert('올바른 백업 파일이 아니에요')
+      toast.error('백업 파일 형식이 맞지 않아요 (items·categories·item_categories 필요)')
       return
     }
 
+    // time_slots 는 나중에 추가된 항목이라 옛 백업에는 없다. 없으면 그냥 건너뛴다.
+    const backupSlots = Array.isArray(backup.time_slots) ? backup.time_slots : []
+
     const proceed = window.confirm(
-      `백업의 항목 ${backup.items.length}개, 카테고리 ${backup.categories.length}개를 가져올까요? `
+      `백업의 항목 ${backup.items.length}개, 카테고리 ${backup.categories.length}개`
+      + (backupSlots.length > 0 ? `, 시간대 ${backupSlots.length}개` : '')
+      + '를 가져올까요? '
       + '기존 데이터는 삭제되지 않고, 같은 id의 데이터는 백업 내용으로 덮어써집니다.'
     )
     if (!proceed) return
@@ -349,17 +403,23 @@ export default function Archive({ session }) {
     const uid = session.user.id
     let stage = ''
     try {
-      // 외래키 때문에 categories → items → item_categories 순서를 지켜야 한다
+      // 외래키 순서를 지켜야 한다.
+      // items.category_id -> categories, items.slot_id -> time_slots 라서
+      // 둘 다 items 보다 먼저 들어가야 한다.
       stage = '카테고리'
       setImportStep(1)
       await upsertChunked('categories', backup.categories.map((c) => ({ ...c, user_id: uid })))
 
-      stage = '항목'
+      stage = '시간대'
       setImportStep(2)
+      await upsertChunked('time_slots', backupSlots.map((s) => ({ ...s, user_id: uid })))
+
+      stage = '항목'
+      setImportStep(3)
       await upsertChunked('items', backup.items.map((i) => ({ ...i, user_id: uid })))
 
       stage = '카테고리 소속'
-      setImportStep(3)
+      setImportStep(4)
       await upsertChunked(
         'item_categories',
         backup.item_categories.map((r) => ({
@@ -371,13 +431,14 @@ export default function Archive({ session }) {
       )
 
       setImportStep(null)
-      alert(`복원 완료: 항목 ${backup.items.length}개`)
+      toast.success(`복원 완료: 항목 ${backup.items.length}개`)
       loadCategories()
+      loadSlots() // 복원된 시간대를 '오늘' 탭이 바로 쓰도록
       refresh()
     } catch (err) {
       console.error(err)
       setImportStep(null)
-      alert(`복원 실패 (${stage} 단계): ${err?.message ?? '알 수 없는 오류'}`)
+      toast.error(`복원 실패 (${stage} 단계): ${err?.message ?? '알 수 없는 오류'}`)
     }
   }
 
@@ -395,7 +456,8 @@ export default function Archive({ session }) {
       position,
       user_id: session.user.id
     })
-    if (!error) loadCategories()
+    if (error) toast.error('카테고리를 추가하지 못했어요')
+    else loadCategories()
   }
 
   const filterActive = categoryId || activeTag || starredOnly || statusFilter || debounced
@@ -403,25 +465,57 @@ export default function Archive({ session }) {
   return (
     <div className="archive">
       <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark">A</span>
+        <button
+          type="button"
+          className="brand"
+          onClick={goHome}
+          title="홈으로 (필터 초기화)"
+          aria-label="홈으로. 검색과 필터를 초기화합니다"
+        >
+          <span className="brand-mark" aria-hidden="true">A</span>
           <span className="brand-name">나의 아카이브</span>
-        </div>
-        <div className="topbar-actions">
+        </button>
+        <div className="topbar-actions" ref={menuRef}>
           <button className="btn-primary" onClick={() => setModalItem(null)}>+ 새 항목</button>
-          <button className="btn-ghost" onClick={() => setBulkOpen(true)} title="여러 링크 저장">⧉ 여러 링크</button>
           <button
-            className="btn-ghost"
-            onClick={exportBackup}
-            disabled={exporting || importStep !== null}
-            title="글/링크/분류 전체를 JSON으로 저장 (이미지는 링크로 포함)"
-          >{exporting ? '내보내는 중...' : '💾 내보내기'}</button>
-          <button
-            className="btn-ghost"
-            onClick={() => fileRef.current?.click()}
-            disabled={exporting || importStep !== null}
-            title="백업 JSON을 불러와 합칩니다 (기존 데이터는 삭제되지 않음)"
-          >{importStep !== null ? `복원 중... (${importStep}/3)` : '📥 가져오기'}</button>
+            className="btn-ghost more-toggle"
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-expanded={menuOpen}
+            aria-label="더 보기"
+            title="더 보기"
+          >⋯</button>
+          <div className={`more-menu ${menuOpen ? 'more-open' : ''}`}>
+            <button
+              className="btn-ghost"
+              onClick={() => { setSettingsOpen(true); setMenuOpen(false) }}
+              title="설정 (화면 테마, 플랜)"
+            >⚙️ <span className="menu-label">설정</span></button>
+            <button
+              className="btn-ghost"
+              onClick={() => { setBulkOpen(true); setMenuOpen(false) }}
+              title="여러 링크 저장"
+            >⧉ 여러 링크</button>
+            <button
+              className="btn-ghost"
+              onClick={() => { exportBackup(); setMenuOpen(false) }}
+              disabled={exporting || importStep !== null}
+              title="글/링크/분류 전체를 JSON으로 저장 (이미지는 링크로 포함)"
+            >{exporting ? '내보내는 중...' : '💾 내보내기'}</button>
+            <button
+              className="btn-ghost"
+              onClick={() => { fileRef.current?.click(); setMenuOpen(false) }}
+              disabled={exporting || importStep !== null}
+              title="백업 JSON을 불러와 합칩니다 (기존 데이터는 삭제되지 않음)"
+            >{importStep !== null ? `복원 중... (${importStep}/4)` : '📥 가져오기'}</button>
+            <button
+              className="btn-ghost"
+              onClick={async () => {
+                const { error } = await supabase.auth.signOut()
+                if (error) toast.error('로그아웃하지 못했어요')
+              }}
+              title="로그아웃"
+            >나가기</button>
+          </div>
           <input
             ref={fileRef}
             type="file"
@@ -429,7 +523,6 @@ export default function Archive({ session }) {
             hidden
             onChange={handleImportFile}
           />
-          <button className="btn-ghost" onClick={() => supabase.auth.signOut()} title="로그아웃">나가기</button>
         </div>
       </header>
 
@@ -476,11 +569,13 @@ export default function Archive({ session }) {
         <input
           value={quickText}
           onChange={(e) => setQuickText(e.target.value)}
-          placeholder="빠른 저장: 입력 후 엔터 (!로 시작하면 할 것으로 저장)"
+          placeholder="빠른 저장 — 입력 후 엔터"
           aria-label="빠른 저장"
         />
         <button type="submit" className="btn-primary btn-sm" disabled={quickBusy || !quickText.trim()}>저장</button>
       </form>
+      {/* 좁은 화면에서는 placeholder 에 다 담기지 않아, 입력 중에만 힌트를 보여 준다 */}
+      <p className="quick-hint">!로 시작하면 &lsquo;할 것&rsquo;으로 저장돼요</p>
 
       {tab === 'today' && (
         <Today
@@ -565,12 +660,25 @@ export default function Archive({ session }) {
           onAdd={addCategory}
         />
       ) : loading && items.length === 0 ? (
-        <div className="center-block"><div className="spinner" aria-label="불러오는 중" /></div>
+        <SkeletonCards view={view} count={view === 'grid' ? 6 : 4} />
       ) : items.length === 0 ? (
         <div className="empty">
-          <p>{filterActive ? '조건에 맞는 항목이 없어요.' : '첫 항목을 저장해 보세요.'}</p>
-          {!filterActive && (
-            <button className="btn-primary" onClick={() => setModalItem(null)}>+ 새 항목 만들기</button>
+          <span className="empty-icon" aria-hidden="true">{filterActive ? '🔍' : '🗂'}</span>
+          <p className="empty-title">
+            {filterActive ? '조건에 맞는 항목이 없어요' : '아직 저장한 것이 없어요'}
+          </p>
+          <p className="empty-sub">
+            {filterActive
+              ? '검색어를 줄이거나 필터를 지워 보세요.'
+              : '떠오른 생각, 링크, 대본을 여기에 모아 두면 나중에 찾기 쉬워요.'}
+          </p>
+          {filterActive ? (
+            <button
+              className="btn-ghost btn-sm"
+              onClick={() => { setSearch(''); setCategoryId(null); setActiveTag(null); setStarredOnly(false); setStatusFilter(null) }}
+            >필터 초기화</button>
+          ) : (
+            <button className="btn-primary" onClick={() => setModalItem(null)}>+ 첫 항목 만들기</button>
           )}
         </div>
       ) : (
@@ -580,12 +688,12 @@ export default function Archive({ session }) {
               key={item.id}
               item={item}
               categories={categories}
-              categoryIds={itemCats[item.id] ?? []}
+              categoryIds={itemCats[item.id] ?? NO_CATEGORIES}
               view={view}
-              onOpen={() => setModalItem(item)}
-              onStar={() => toggleStar(item)}
-              onDone={() => toggleDone(item)}
-              onTag={(t) => setActiveTag(activeTag === t ? null : t)}
+              onOpen={openItem}
+              onStar={toggleStar}
+              onDone={toggleDone}
+              onTag={toggleTag}
             />
           ))}
         </div>
@@ -629,6 +737,23 @@ export default function Archive({ session }) {
           userId={session.user.id}
           onClose={() => setBulkOpen(false)}
           onSaved={() => { setBulkOpen(false); refresh() }}
+        />
+      )}
+
+      {(exporting || importStep !== null) && (
+        <div className="busy-pill" role="status">
+          <span className="busy-dot" aria-hidden="true" />
+          {exporting ? '백업을 만드는 중...' : `복원 중 (${importStep}/4)`}
+        </div>
+      )}
+
+      {settingsOpen && (
+        <Settings
+          email={session.user.email}
+          themePref={themePref}
+          onThemeChange={setThemePref}
+          onOpenPricing={() => { setSettingsOpen(false); onNavigate('/pricing') }}
+          onClose={() => setSettingsOpen(false)}
         />
       )}
 

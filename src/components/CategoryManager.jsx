@@ -1,5 +1,7 @@
+// 카테고리 목록 관리 모달. 이름·아이콘·색·상위 카테고리를 그 자리에서 고치고 바로 저장한다.
 import { useEffect, useState } from 'react'
 import { supabase, COLOR_KEYS, ICON_CHOICES, subtreeIds } from '../supabase.js'
+import { useEscapeKey } from '../hooks.js'
 
 export default function CategoryManager({ categories, userId, onClose, onChanged }) {
   const [rows, setRows] = useState(categories)
@@ -10,11 +12,7 @@ export default function CategoryManager({ categories, userId, onClose, onChanged
 
   useEffect(() => { setRows(categories) }, [categories])
 
-  useEffect(() => {
-    function onKey(e) { if (e.key === 'Escape') handleClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  })
+  useEscapeKey(handleClose)
 
   function handleClose() {
     onChanged()
@@ -105,7 +103,7 @@ export default function CategoryManager({ categories, userId, onClose, onChanged
         </div>
 
         {rows.length === 0 && (
-          <p className="cm-empty">아직 카테고리가 없어요. 아래에서 추가해 보세요.</p>
+          <p className="cm-empty">아직 카테고리가 없어요. 아래에서 첫 카테고리를 만들어 보세요.</p>
         )}
 
         <ul className="cm-list">

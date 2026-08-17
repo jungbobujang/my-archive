@@ -1,5 +1,8 @@
+// 휴지통. items.deleted_at 이 채워진 행만 모아 복원하거나 영구 삭제한다.
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../supabase.js'
+import { useEscapeKey } from '../hooks.js'
+import { SkeletonRows } from './Skeleton.jsx'
 
 function deletedLabel(iso) {
   const d = new Date(iso)
@@ -26,11 +29,7 @@ export default function Trash({ onClose, onChanged }) {
 
   useEffect(() => { load() }, [load])
 
-  useEffect(() => {
-    function onKey(e) { if (e.key === 'Escape' && !busy) handleClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  })
+  useEscapeKey(handleClose, !busy)
 
   function handleClose() {
     onChanged()
@@ -76,9 +75,9 @@ export default function Trash({ onClose, onChanged }) {
         </div>
 
         {loading ? (
-          <div className="center-block"><div className="spinner" aria-label="불러오는 중" /></div>
+          <SkeletonRows count={3} />
         ) : rows.length === 0 ? (
-          <p className="cm-empty">휴지통이 비어 있어요.</p>
+          <p className="cm-empty">휴지통이 비어 있어요. 지운 항목은 여기로 들어옵니다.</p>
         ) : (
           <>
             <div className="trash-top">
