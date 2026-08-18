@@ -1,5 +1,5 @@
 -- ============================================================
--- 카테고리 확장 시드 (2계층) — 확장판
+-- 카테고리 확장 시드 (최대 3계층) — 확장판
 --
 -- 실행: Supabase 대시보드 → SQL Editor 에 통째로 붙여넣고 Run
 --       (SQL Editor 는 RLS 를 우회하므로 auth.uid() 없이 user_id 를 직접 넣는다)
@@ -21,6 +21,7 @@
 --   🧠 뇌지컬   (purple, 4) — 💎 배움·통찰 · 📖 공부법
 --   💪 피지컬   (green,  5) — 🏋️ 운동 · ✨ 외모·피부 · 🥗 건강·식단
 --   🍜 생활     (amber,  6) — 🍚 맛집·음식 · 🛒 쇼핑·꿀팁 · 🗺 가볼 곳
+--                              └ 🍚 맛집·음식 아래 3단: 🇰🇷 국내 · ✈️ 해외 · 📌 기타(레시피·식품류)
 --   💰 재테크   (pink,   7) — 📈 돈 공부 · 💵 투자 메모
 --   📝 기타 메모 (gray,   8) — 하위 없음. 분류 애매한 것 전부.
 --
@@ -40,6 +41,7 @@ declare
   v_parent   uuid;
   v_id       uuid;
   v_cur      record;
+  v_gparent  uuid;
   n_made     int := 0;
   n_kept     int := 0;
   n_moved    int := 0;
@@ -205,6 +207,55 @@ begin
     end if;
   end loop;
 
+  -- ── 5) 3단계 (맛집·음식 아래) ──────────────────────────────
+  -- 유일한 3단이다. 상위를 '이름' 이 아니라 '2단 노드의 id' 로 찾아야 한다 —
+  -- 여기서 parent_id is null 로 찾으면 최상위 중에 없으니 못 찾는다.
+  select id into v_gparent
+    from public.categories
+   where user_id = uid and name = '맛집·음식'
+   limit 1;
+
+  if v_gparent is null then
+    raise notice '  건너뜀 (2단 ''맛집·음식'' 을 찾지 못해 3단을 만들지 않음)';
+  else
+    for rec in
+      select * from (values
+        ('국내',              '🇰🇷', 'amber', 1),
+        ('해외',              '✈️', 'amber', 2),
+        ('기타(레시피·식품류)', '📌', 'amber', 3)
+      ) as t(nm, ic, col, pos)
+    loop
+      select id, parent_id into v_cur
+        from public.categories
+       where user_id = uid and name = rec.nm
+       limit 1;
+
+      if v_cur.id is null then
+        insert into public.categories (user_id, name, icon, color, parent_id, position)
+        values (uid, rec.nm, rec.ic, rec.col, v_gparent, rec.pos);
+        n_made := n_made + 1;
+        raise notice '  만듦: % % (상위 맛집·음식)', rec.ic, rec.nm;
+
+      elsif v_cur.parent_id is null then
+        update public.categories
+           set parent_id = v_gparent, icon = rec.ic, color = rec.col, position = rec.pos
+         where id = v_cur.id;
+        n_moved := n_moved + 1;
+        raise notice '  연결: % % → 상위 맛집·음식', rec.ic, rec.nm;
+
+      elsif v_cur.parent_id = v_gparent then
+        update public.categories
+           set icon = rec.ic, color = rec.col, position = rec.pos
+         where id = v_cur.id;
+        n_kept := n_kept + 1;
+
+      else
+        raise notice '  건너뜀 (이미 다른 상위에 붙어 있음): %', rec.nm;
+        n_kept := n_kept + 1;
+      end if;
+    end loop;
+  end if;
+
   raise notice '완료 — 새로 만듦 %개 · 재활용 %개 · 상위로 연결 %개', n_made, n_kept, n_moved;
 
   -- ── 5) 최상위 순서 겹침 알림 ───────────────────────────────
@@ -227,19 +278,30 @@ $$;
 -- ============================================================
 -- 확인 — 만들어진 트리를 눈으로 본다
 -- ============================================================
+-- 3단까지 있으므로 재귀로 훑는다. 예전의 1단 join 은 손자를 상위 없이 떨궈 놨다.
+with recursive tree as (
+  select c.id, c.name, c.icon, c.color, c.position, c.parent_id,
+         0 as depth,
+         lpad('', 0) || c.position::text as sort_path
+    from public.categories c
+   where c.user_id = (select id from auth.users limit 1)
+     and c.parent_id is null
+  union all
+  select c.id, c.name, c.icon, c.color, c.position, c.parent_id,
+         t.depth + 1,
+         t.sort_path || '.' || lpad(c.position::text, 3, '0')
+    from public.categories c
+    join tree t on c.parent_id = t.id
+   where c.user_id = (select id from auth.users limit 1)
+)
 select
-  case when c.parent_id is null then '■ 최상위' else '   └ ' || p.icon || ' ' || p.name end as "상위",
-  c.icon || ' ' || c.name as "카테고리",
-  c.color                 as "색",
-  c.position              as "순서"
-from public.categories c
-left join public.categories p on p.id = c.parent_id
-where c.user_id = (select id from auth.users limit 1)
-order by
-  coalesce(p.position, c.position),   -- 상위 묶음끼리 모으고
-  (c.parent_id is not null),          -- 상위를 먼저
-  c.position,
-  c.name;
+  repeat('    ', depth) || case when depth = 0 then '■ ' else '└ ' end
+    || icon || ' ' || name          as "카테고리",
+  depth                             as "단계",
+  color                             as "색",
+  position                          as "순서"
+from tree
+order by sort_path, name;
 
 
 -- ============================================================
@@ -274,4 +336,5 @@ order by
 --                 '주제 후보', '글귀·소재', '채널 전략', '해외 광맥',
 --                 '수업 아이디어', '업무 메모', '프로젝트 할 일', '개발 노하우', 'AI·도구',
 --                 '배움·통찰', '공부법', '운동', '외모·피부', '건강·식단',
---                 '맛집·음식', '쇼핑·꿀팁', '가볼 곳', '돈 공부', '투자 메모');
+--                 '맛집·음식', '쇼핑·꿀팁', '가볼 곳', '돈 공부', '투자 메모',
+--                 '국내', '해외', '기타(레시피·식품류)');

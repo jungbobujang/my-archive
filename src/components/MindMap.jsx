@@ -64,10 +64,7 @@ export default function MindMap({ categories, counts, onSelect, onAdd }) {
       const pos = polar(angle, R_ROOT)
       const kids = childrenOf(categories, root.id)
 
-      // 3단계 이상은 그리지 않고 부모에 +N 으로 요약한다
-      const deeper = kids.reduce((n, k) => n + childrenOf(categories, k.id).length, 0)
-
-      laid.push({ cat: root, ...pos, depth: 1, extra: deeper })
+      laid.push({ cat: root, ...pos, depth: 1, extra: 0 })
       edges.push({ x1: CX, y1: CY, x2: pos.x, y2: pos.y, color: root.color })
 
       if (kids.length > 0) {
@@ -79,7 +76,13 @@ export default function MindMap({ categories, counts, onSelect, onAdd }) {
         kids.forEach((kid, j) => {
           const kAngle = kids.length === 1 ? angle : start + j * gap
           const kPos = polar(kAngle, R_CHILD)
-          laid.push({ cat: kid, ...kPos, depth: 2, extra: 0 })
+          // 3단계 이상은 그리지 않고 '그 자식을 가진 노드' 에 +N 으로 요약한다.
+          // 예전에는 이 수를 최상위에 붙였다 — 생활 > 맛집·음식 > 국내 구조에서
+          // '+3' 이 맛집·음식이 아니라 생활 옆에 떠서, 생활 밑에 뭔가 숨어 있는 것처럼 보였다.
+          laid.push({
+            cat: kid, ...kPos, depth: 2,
+            extra: childrenOf(categories, kid.id).length,
+          })
           edges.push({ x1: pos.x, y1: pos.y, x2: kPos.x, y2: kPos.y, color: kid.color })
         })
       }

@@ -15,7 +15,8 @@ export const COLOR_KEYS = ['purple', 'coral', 'teal', 'gray', 'blue', 'amber', '
 export const ICON_CHOICES = [
   '💡', '🎬', '🖼️', '📝', '📚', '🏋️', '✍️', '🔬', '🎨', '📌',
   '📺', '🏫', '⚙️', '🧠', '📊', '🌍', '🗂', '✅', '🔧', '💎',
-  '💪', '🍜', '💰', '✨', '🥗', '🍚', '🛒', '🗺', '📈', '💵', '🤖', '📖'
+  '💪', '🍜', '💰', '✨', '🥗', '🍚', '🛒', '🗺', '📈', '💵', '🤖', '📖',
+  '🇰🇷', '✈️'
 ]
 
 export const PAGE_SIZE = 24
@@ -151,6 +152,53 @@ export function subtreeIds(categories, rootId) {
 
 export function childrenOf(categories, parentId) {
   return categories.filter((c) => (c.parent_id ?? null) === parentId)
+}
+
+// 트리 차례대로 [{ cat, depth }] 로 펼친다 (최상위 0, 그 아래 1, 2 …).
+// DB 는 position 으로만 정렬해 주므로 부모와 자식이 뒤섞여 온다. 3단이 되면
+// 어느 것이 누구 밑인지 목록만 보고는 알 수 없어서, 화면에서 쓸 순서를 여기서 만든다.
+//
+// 고아(부모가 지워졌거나 못 찾는 행)도 반드시 한 번은 내보낸다 — 화면에서 사라지면
+// 이름을 고치거나 지울 방법조차 없어진다. 순환 참조가 있어도 방문 집합으로 멈춘다.
+export function treeOrder(categories) {
+  const rows = categories ?? []
+  const out = []
+  const seen = new Set()
+
+  const walk = (parentId, depth) => {
+    for (const c of rows) {
+      if ((c.parent_id ?? null) !== parentId) continue
+      if (seen.has(c.id)) continue
+      seen.add(c.id)
+      out.push({ cat: c, depth })
+      walk(c.id, depth + 1)
+    }
+  }
+  walk(null, 0)
+
+  for (const c of rows) {
+    if (!seen.has(c.id)) {
+      seen.add(c.id)
+      out.push({ cat: c, depth: 0 })
+    }
+  }
+  return out
+}
+
+// "생활 › 맛집·음식" — 자기 위쪽 조상들의 이름. 3단부터는 이름만으로 구분이 안 된다
+// ('국내'·'기타' 처럼 짧은 이름이 그렇다).
+export function categoryPath(categories, id) {
+  const byId = new Map((categories ?? []).map((c) => [c.id, c]))
+  const names = []
+  let cur = byId.get(id)
+  const guard = new Set()
+  while (cur?.parent_id && !guard.has(cur.parent_id)) {
+    guard.add(cur.parent_id)
+    cur = byId.get(cur.parent_id)
+    if (!cur) break
+    names.unshift(cur.name)
+  }
+  return names
 }
 
 // ---------- 조회 ----------

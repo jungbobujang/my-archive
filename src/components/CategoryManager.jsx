@@ -1,6 +1,6 @@
 // 카테고리 목록 관리 모달. 이름·아이콘·색·상위 카테고리를 그 자리에서 고치고 바로 저장한다.
 import { useEffect, useState } from 'react'
-import { supabase, COLOR_KEYS, ICON_CHOICES, subtreeIds } from '../supabase.js'
+import { supabase, COLOR_KEYS, ICON_CHOICES, subtreeIds, treeOrder } from '../supabase.js'
 import { useEscapeKey } from '../hooks.js'
 
 export default function CategoryManager({ categories, userId, onClose, onChanged }) {
@@ -55,11 +55,18 @@ export default function CategoryManager({ categories, userId, onClose, onChanged
     await persist(cat.id, { parent_id: parentId })
   }
 
-  // 자기 자신과 자손은 상위로 지정할 수 없다 (순환 방지)
+  // 자기 자신과 자손은 상위로 지정할 수 없다 (순환 방지).
+  // 트리 차례로 내보내고 깊이만큼 들여 쓴다 — 3단이 되면 평평한 목록만으로는
+  // 어느 '기타'·'국내' 가 누구 밑인지 고를 수가 없다.
   function parentOptions(cat) {
     const blocked = new Set(subtreeIds(rows, cat.id))
-    return rows.filter((c) => !blocked.has(c.id))
+    return treeOrder(rows)
+      .filter(({ cat: c }) => !blocked.has(c.id))
+      .map(({ cat: c, depth }) => ({ ...c, depth }))
   }
+
+  // 화면에 그릴 순서 (부모 바로 아래에 자식이 오도록)
+  const ordered = treeOrder(rows)
 
   async function handleDelete(cat) {
     if (!window.confirm('이 카테고리를 삭제할까요? 소속 항목들은 미분류로 남습니다')) return
@@ -107,8 +114,8 @@ export default function CategoryManager({ categories, userId, onClose, onChanged
         )}
 
         <ul className="cm-list">
-          {rows.map((cat) => (
-            <li key={cat.id} className="cm-row">
+          {ordered.map(({ cat, depth }) => (
+            <li key={cat.id} className={`cm-row cm-depth-${Math.min(depth, 3)}`}>
               <div className="cm-line">
                 <button
                   type="button"
@@ -156,7 +163,9 @@ export default function CategoryManager({ categories, userId, onClose, onChanged
                   >
                     <option value="">(없음 · 최상위)</option>
                     {parentOptions(cat).map((p) => (
-                      <option key={p.id} value={p.id}>{p.icon} {p.name}</option>
+                      <option key={p.id} value={p.id}>
+                        {'  '.repeat(p.depth)}{p.depth > 0 ? '└ ' : ''}{p.icon} {p.name}
+                      </option>
                     ))}
                   </select>
                 </label>

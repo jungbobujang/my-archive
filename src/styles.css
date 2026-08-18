@@ -266,6 +266,9 @@ a:focus-visible {
 }
 .chip:hover { border-color: var(--ink-faint); }
 .chip:active { transform: translateY(1px); }
+/* 3단 카테고리 칩 앞에 붙는 상위 이름 — 눈에 덜 띄게 해서 이름 자체를 가리지 않는다 */
+.chip-path { color: var(--ink-faint); font-size: 12px; }
+.chip-on .chip-path { color: inherit; opacity: .75; }
 .chip-on:hover { background: var(--ink-hover); border-color: var(--ink-hover); }
 .chip-on {
   background: var(--ink);
@@ -923,6 +926,17 @@ a.card-thumb { cursor: pointer; }
   border-bottom: 1px solid var(--line);
   padding: 10px 0;
 }
+/* 계층 들여쓰기. 3단(생활 > 맛집·음식 > 국내)이 되면서, 평평한 목록만으로는
+   어느 '국내'·'기타' 가 누구 밑인지 알 수 없어졌다. 왼쪽 선으로 소속을 보인다.
+   들여쓰기 폭이 좁은 이유: 375px 에서 3단이 들어가야 하고, 안쪽에 상위 선택
+   드롭다운과 색 점 8개가 이미 폭을 다 쓰고 있다. */
+.cm-depth-1, .cm-depth-2, .cm-depth-3 {
+  border-left: 2px solid var(--line);
+  padding-left: 10px;
+}
+.cm-depth-1 { margin-left: 10px; }
+.cm-depth-2 { margin-left: 20px; }
+.cm-depth-3 { margin-left: 30px; }
 .cm-line { display: flex; align-items: center; gap: 8px; }
 .cm-icon:hover { border-color: var(--line); background: var(--bg); }
 .cm-icon {

@@ -2,7 +2,8 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   supabase, extractUrls, parseTags, youtubeThumb, ymd,
-  parseImages, joinImages, uploadImage, imageFilesFromPaste, imageFilesFromDrop, MAX_IMAGES
+  parseImages, joinImages, uploadImage, imageFilesFromPaste, imageFilesFromDrop, MAX_IMAGES,
+  treeOrder, categoryPath
 } from '../supabase.js'
 import { useEscapeKey } from '../hooks.js'
 
@@ -243,17 +244,26 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
 
         <div className="field">
           카테고리 {categoryIds.length === 0 ? '(미분류)' : `(${categoryIds.length}개 선택)`}
+          {/* 트리 차례로 늘어놓고, 3단부터는 바로 위 상위를 앞에 붙인다.
+              '국내'·'해외'·'기타' 처럼 짧은 이름은 그것만 봐서는 무엇의 하위인지 모른다. */}
           <div className="cat-select">
-            {categories.map((c) => (
-              <button
-                key={c.id}
-                type="button"
-                className={`chip ${categoryIds.includes(c.id) ? 'chip-on' : ''}`}
-                onClick={() => setCategoryIds((prev) => (
-                  prev.includes(c.id) ? prev.filter((x) => x !== c.id) : [...prev, c.id]
-                ))}
-              >{c.icon} {c.name}</button>
-            ))}
+            {treeOrder(categories).map(({ cat: c, depth }) => {
+              const path = depth >= 2 ? categoryPath(categories, c.id).slice(-1)[0] : null
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={`chip chip-d${Math.min(depth, 2)} ${categoryIds.includes(c.id) ? 'chip-on' : ''}`}
+                  onClick={() => setCategoryIds((prev) => (
+                    prev.includes(c.id) ? prev.filter((x) => x !== c.id) : [...prev, c.id]
+                  ))}
+                  title={[...categoryPath(categories, c.id), c.name].join(' › ')}
+                >
+                  {path && <span className="chip-path">{path} › </span>}
+                  {c.icon} {c.name}
+                </button>
+              )
+            })}
           </div>
         </div>
 
