@@ -1,7 +1,11 @@
 // 항목 생성/수정 모달. 저장은 items 한 줄 + item_categories 를 통째로 갈아끼우는 두 단계다.
-import { useEffect, useRef, useState } from 'react'
+//
+// '여러 링크 저장' 모달을 여기로 흡수했다(별도 화면 폐지). 링크를 여러 개 붙여넣으면
+// '한 항목에 모두 담기'(기본)와 '링크마다 개별 항목'을 고르게 하고, 개별 모드가
+// 예전 그 화면이 하던 일(링크마다 noembed 로 제목을 받아 한 건씩 저장)을 그대로 한다.
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  supabase, extractUrls, parseTags, youtubeThumb, ymd,
+  supabase, extractUrls, parseTags, youtubeThumb, ymd, fetchLinkTitle,
   parseImages, joinImages, uploadImage, imageFilesFromPaste, imageFilesFromDrop, MAX_IMAGES,
   treeOrder, categoryPath
 } from '../supabase.js'
@@ -38,6 +42,17 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const fileRef = useRef(null)
+
+  // 링크마다 개별 항목으로 나눌지 (링크가 2개 이상일 때만 고를 수 있다)
+  const [splitMode, setSplitMode] = useState(false)
+  const [progress, setProgress] = useState(null) // { done, total }
+
+  const links = useMemo(() => extractUrls(linkUrl), [linkUrl])
+  const splitting = !isEdit && splitMode && links.length > 1
+
+  // 제목·링크·내용·이미지 중 하나라도 있으면 저장할 수 있다. 제목은 이제 필수가 아니다.
+  const hasAnything =
+    title.trim().length > 0 || links.length > 0 || content.trim().length > 0 || images.length > 0
 
   // 수정 모드에서 DB에 저장돼 있는 링크 목록
   const savedLinks = extractUrls(item?.link_url ?? '')
@@ -109,21 +124,99 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     addFiles(files)
   }
 
-  async function handleSave() {
-    if (!title.trim()) {
-      setError('제목을 입력해 주세요')
-      return
+  // 제목이 비었을 때 대신 지어 준다.
+  //   ① 링크가 있으면 첫 링크의 제목 (noembed)
+  //   ② 내용이 있으면 앞 20자
+  //   ③ 이미지만 있으면 '이미지 YYYY-MM-DD'
+  // ②를 ③보다 앞에 둔 이유: 글과 이미지가 함께 있을 때 날짜보다 글 첫머리가 훨씬 잘 읽힌다.
+  async function makeTitle(firstLink) {
+    if (firstLink) {
+      const fetched = await fetchLinkTitle(firstLink)
+      if (fetched) return fetched
     }
+    const body = content.trim()
+    if (body) return body.slice(0, 20)
+    if (images.length > 0) return `이미지 ${ymd(new Date())}`
+    return firstLink || `메모 ${ymd(new Date())}`
+  }
+
+  // 한 건 저장 + 소속 연결. 여러 건을 만들 때도 이 함수를 돌려 쓴다.
+  async function insertOne(payload) {
+    const { data: saved, error: dbErr } = await supabase
+      .from('items').insert(payload).select().single()
+    if (dbErr) throw dbErr
+    await linkCategories(saved.id)
+    return saved
+  }
+
+  async function linkCategories(itemId) {
+    // 소속은 통째로 갈아끼운다 (delete → insert)
+    const { error: delErr } = await supabase
+      .from('item_categories').delete().eq('item_id', itemId)
+    if (delErr) throw delErr
+    if (categoryIds.length === 0) return
+    const rows = categoryIds.map((cid) => ({ item_id: itemId, category_id: cid, user_id: userId }))
+    const { error: linkErr } = await supabase.from('item_categories').insert(rows)
+    if (linkErr) throw linkErr
+  }
+
+  // 카테고리·태그·실행 상태는 어느 모드에서나 공통으로 붙는다
+  function commonFields() {
+    return {
+      category_id: categoryIds[0] ?? null, // 하위호환용 단일 컬럼
+      tags: parseTags(tagsText),
+      status,
+      // 할 것이 아니면 일정 정보는 남기지 않는다
+      due_date: status === 'todo' ? (dueDate || null) : null,
+      slot_id: status === 'todo' ? slotId : null,
+      user_id: userId
+    }
+  }
+
+  async function handleSave() {
     if (uploading > 0) {
       setError('이미지를 올리는 중이에요. 끝나면 저장해 주세요.')
+      return
+    }
+    if (!hasAnything) {
+      setError('제목·링크·내용·이미지 중 하나는 있어야 해요')
       return
     }
     setBusy(true)
     setError('')
     try {
-      let finalImages = images
+      // ── 링크마다 개별 항목 ─────────────────────────────────
+      if (splitting) {
+        let made = 0
+        for (let i = 0; i < links.length; i++) {
+          const url = links[i]
+          setProgress({ done: i, total: links.length })
+          try {
+            const fetched = (await fetchLinkTitle(url)) || url
+            await insertOne({
+              ...commonFields(),
+              title: fetched,
+              // 이미지와 내용은 첫 항목에만 (N개에 같은 것을 복사하면 잡음이 된다)
+              content: i === 0 ? content : '',
+              link_url: url,
+              image_url: i === 0 && images.length > 0 ? joinImages(images) : youtubeThumb(url)
+            })
+            made += 1
+          } catch (err) {
+            console.error('저장 실패:', url, err) // 하나가 실패해도 나머지는 계속한다
+          }
+        }
+        setProgress({ done: links.length, total: links.length })
+        if (made === 0) throw new Error('한 건도 저장하지 못했습니다')
+        if (made < links.length) {
+          setError(`${made}개 저장 (${links.length - made}개 실패)`)
+        }
+        onSaved()
+        return
+      }
 
-      const links = extractUrls(linkUrl)
+      // ── 한 항목에 모두 담기 (수정도 이 길) ──────────────────
+      let finalImages = images
       const cleanLink = links.length > 0 ? links.join('\n') : null
       if (finalImages.length === 0 && links.length > 0) {
         // 대표 이미지가 없으면 첫 번째 유튜브 링크의 썸네일을 쓴다
@@ -131,38 +224,23 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
         if (thumb) finalImages = [thumb]
       }
 
+      const finalTitle = title.trim() || (await makeTitle(links[0] ?? null))
+
       const payload = {
-        title: title.trim(),
+        ...commonFields(),
+        title: finalTitle,
         content,
-        category_id: categoryIds[0] ?? null, // 하위호환용 단일 컬럼
-        tags: parseTags(tagsText),
-        status,
-        // 할 것이 아니면 일정 정보는 남기지 않는다
-        due_date: status === 'todo' ? (dueDate || null) : null,
-        slot_id: status === 'todo' ? slotId : null,
         link_url: cleanLink,
-        image_url: joinImages(finalImages),
-        user_id: userId
+        image_url: joinImages(finalImages)
       }
 
-      const { data: saved, error: dbErr } = isEdit
-        ? await supabase.from('items').update(payload).eq('id', item.id).select().single()
-        : await supabase.from('items').insert(payload).select().single()
-      if (dbErr) throw dbErr
-
-      // 소속은 통째로 갈아끼운다 (delete → insert)
-      const { error: delErr } = await supabase
-        .from('item_categories').delete().eq('item_id', saved.id)
-      if (delErr) throw delErr
-
-      if (categoryIds.length > 0) {
-        const rows = categoryIds.map((cid) => ({
-          item_id: saved.id,
-          category_id: cid,
-          user_id: userId
-        }))
-        const { error: linkErr } = await supabase.from('item_categories').insert(rows)
-        if (linkErr) throw linkErr
+      if (isEdit) {
+        const { data: saved, error: dbErr } = await supabase
+          .from('items').update(payload).eq('id', item.id).select().single()
+        if (dbErr) throw dbErr
+        await linkCategories(saved.id)
+      } else {
+        await insertOne(payload)
       }
 
       onSaved()
@@ -171,6 +249,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
       console.error(err)
     } finally {
       setBusy(false)
+      setProgress(null)
     }
   }
 
@@ -204,11 +283,15 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
         </div>
 
         <label className="field">
-          제목
+          제목 <span className="field-hint">(비우면 자동으로 지어요)</span>
           <input
             value={title}
             onChange={(e) => { setTitle(e.target.value); setError('') }}
-            placeholder="쇼츠 대본 - AI 활용법 3가지"
+            placeholder={
+              links.length > 0 ? '비우면 링크 제목을 가져옵니다'
+                : images.length > 0 ? `비우면 '이미지 ${ymd(new Date())}'`
+                  : '쇼츠 대본 - AI 활용법 3가지'
+            }
             autoFocus
           />
         </label>
@@ -224,10 +307,51 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
               e.target.style.height = `${e.target.scrollHeight}px`
             }}
             rows={2}
-            placeholder="링크 (여러 개면 줄바꿈으로 구분)"
+            placeholder="링크 (여러 개면 줄바꿈이나 공백으로 구분)"
             inputMode="url"
           />
         </label>
+
+        {links.length > 0 && (
+          <p className={`bulk-count ${links.length > 1 ? 'bulk-count-on' : ''}`}>
+            {links.length}개 링크 감지됨
+          </p>
+        )}
+
+        {/* 링크가 둘 이상일 때만 나눌지 묻는다. 수정 중에는 나눌 수 없다(이미 있는 한 항목이다). */}
+        {!isEdit && links.length > 1 && (
+          <div className="field">
+            저장 방식
+            <div className="split-choice">
+              <label className="split-opt">
+                <input
+                  type="radio"
+                  name="split"
+                  checked={!splitMode}
+                  onChange={() => setSplitMode(false)}
+                  disabled={busy}
+                />
+                <span>한 항목에 모두 담기<small>링크 {links.length}개가 한 항목의 링크 목록으로</small></span>
+              </label>
+              <label className="split-opt">
+                <input
+                  type="radio"
+                  name="split"
+                  checked={splitMode}
+                  onChange={() => setSplitMode(true)}
+                  disabled={busy}
+                />
+                <span>링크마다 개별 항목 만들기<small>{links.length}개 항목 · 제목은 링크에서 자동으로</small></span>
+              </label>
+            </div>
+            {splitting && images.length > 0 && (
+              <p className="field-note">이미지와 내용은 첫 항목에만 첨부됩니다.</p>
+            )}
+            {splitting && (
+              <p className="field-note">카테고리·태그·실행 상태는 {links.length}개 모두에 함께 적용됩니다.</p>
+            )}
+          </div>
+        )}
 
         {isEdit && savedLinks.length > 1 && (
           <div className="field">
@@ -442,8 +566,17 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
           )}
           <div className="modal-foot-right">
             <button className="btn-ghost" onClick={onClose} disabled={busy}>취소</button>
-            <button className="btn-primary" onClick={handleSave} disabled={busy || uploading > 0}>
-              {busy ? '저장 중...' : uploading > 0 ? '이미지 올리는 중...' : '저장'}
+            <button
+              className="btn-primary"
+              onClick={handleSave}
+              disabled={busy || uploading > 0 || !hasAnything}
+            >
+              {progress
+                ? `${progress.done}/${progress.total} 저장 중...`
+                : busy ? '저장 중...'
+                  : uploading > 0 ? '이미지 올리는 중...'
+                    : splitting ? `${links.length}개 항목 저장`
+                      : '저장'}
             </button>
           </div>
         </div>

@@ -1130,6 +1130,31 @@ a.card-thumb { cursor: pointer; }
 }
 .bulk-count-on { color: var(--accent); font-weight: 600; }
 
+/* 라벨 옆 회색 보조 문구 / 필드 아래 안내 한 줄 */
+.field-hint { color: var(--ink-faint); font-weight: 400; font-size: 12px; }
+.field-note { margin: 6px 0 0; font-size: 12px; color: var(--ink-faint); line-height: 1.5; }
+
+/* 저장 방식 라디오 — 세로로 쌓는다. 좁은 화면에서 두 개를 나란히 두면
+   설명 문구가 두세 줄로 접혀 되레 읽기 어렵다. */
+.split-choice { display: flex; flex-direction: column; gap: 6px; }
+.split-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 13.5px;
+}
+.split-opt:hover { border-color: var(--ink-faint); }
+.split-opt input { margin-top: 2px; flex: none; }
+.split-opt span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.split-opt small { color: var(--ink-faint); font-size: 12px; line-height: 1.45; }
+/* 고른 쪽을 눈에 띄게 (라디오만으로는 훑을 때 안 보인다) */
+.split-opt:has(input:checked) { border-color: var(--accent); background: var(--bg); }
+
 .bulk-check {
   display: flex;
   align-items: center;

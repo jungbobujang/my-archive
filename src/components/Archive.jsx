@@ -11,7 +11,6 @@ import ItemModal from './ItemModal.jsx'
 import ItemCard from './ItemCard.jsx'
 import CategoryManager from './CategoryManager.jsx'
 import MindMap from './MindMap.jsx'
-import BulkAdd from './BulkAdd.jsx'
 import Today from './Today.jsx'
 import Trash from './Trash.jsx'
 import { SkeletonCards } from './Skeleton.jsx'
@@ -31,7 +30,6 @@ export default function Archive({ session, onNavigate }) {
   const [categories, setCategories] = useState([])
   const [slots, setSlots] = useState([])
   const [managerOpen, setManagerOpen] = useState(false)
-  const [bulkOpen, setBulkOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [trashCount, setTrashCount] = useState(0)
   const [trashOpen, setTrashOpen] = useState(false)
@@ -549,11 +547,6 @@ export default function Archive({ session, onNavigate }) {
             >⚙️ <span className="menu-label">설정</span></button>
             <button
               className="btn-ghost"
-              onClick={() => { setBulkOpen(true); setMenuOpen(false) }}
-              title="여러 링크 저장"
-            >⧉ 여러 링크</button>
-            <button
-              className="btn-ghost"
               onClick={() => { exportBackup(); setMenuOpen(false) }}
               disabled={exporting || importStep !== null}
               title="글/링크/분류 전체를 JSON으로 저장 (이미지는 링크로 포함)"
@@ -812,15 +805,6 @@ export default function Archive({ session, onNavigate }) {
           userId={session.user.id}
           onClose={() => setModalItem(undefined)}
           onSaved={() => { setModalItem(undefined); refresh() }}
-        />
-      )}
-
-      {bulkOpen && (
-        <BulkAdd
-          categories={categories}
-          userId={session.user.id}
-          onClose={() => setBulkOpen(false)}
-          onSaved={() => { setBulkOpen(false); refresh() }}
         />
       )}
 
