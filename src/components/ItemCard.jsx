@@ -5,6 +5,7 @@
 // 대신 Archive 쪽에서 콜백을 useCallback 으로 고정하고 categoryIds 도
 // 없을 때 같은 빈 배열을 넘겨야 memo 가 실제로 걸린다.
 import { memo } from 'react'
+import { parseImages } from '../supabase.js'
 
 function formatDate(iso) {
   const d = new Date(iso)
@@ -25,10 +26,14 @@ function ItemCard({ item, categories, categoryIds, view, onOpen, onStar, onTag, 
   const firstLink = links[0] ?? null
   const actionable = item.status === 'todo' || item.status === 'done'
   const done = item.status === 'done'
+  // 카드에는 첫 장만 대표로 싣는다. 나머지는 장수만 알리고 모달에서 본다.
+  const images = parseImages(item.image_url)
+  const cover = images[0] ?? null
+  const more = images.length - 1
 
   return (
     <article className={`card cat-border-${color} ${view === 'list' ? 'card-row' : ''} ${done ? 'card-done' : ''}`}>
-      {item.image_url && (
+      {cover && (
         firstLink ? (
           <a
             className="card-thumb"
@@ -37,11 +42,13 @@ function ItemCard({ item, categories, categoryIds, view, onOpen, onStar, onTag, 
             rel="noopener noreferrer"
             aria-label={`${item.title} 링크 열기`}
           >
-            <img src={item.image_url} alt="" loading="lazy" decoding="async" />
+            <img src={cover} alt="" loading="lazy" decoding="async" />
+            {more > 0 && <span className="thumb-more">외 {more}장</span>}
           </a>
         ) : (
           <button className="card-thumb" onClick={() => onOpen(item)} aria-label={`${item.title} 열기`}>
-            <img src={item.image_url} alt="" loading="lazy" decoding="async" />
+            <img src={cover} alt="" loading="lazy" decoding="async" />
+            {more > 0 && <span className="thumb-more">외 {more}장</span>}
           </button>
         )
       )}
@@ -61,7 +68,7 @@ function ItemCard({ item, categories, categoryIds, view, onOpen, onStar, onTag, 
             aria-label={item.starred ? '중요 해제' : '중요 표시'}
           >★</button>
         </div>
-        {item.content && !item.image_url && (
+        {item.content && !cover && (
           <p className="card-preview">{item.content.slice(0, 120)}</p>
         )}
         <div className="card-meta">

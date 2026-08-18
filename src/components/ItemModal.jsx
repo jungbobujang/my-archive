@@ -1,6 +1,9 @@
 // 항목 생성/수정 모달. 저장은 items 한 줄 + item_categories 를 통째로 갈아끼우는 두 단계다.
-import { useEffect, useState } from 'react'
-import { supabase, BUCKET, extractUrls, parseTags, youtubeThumb, ymd } from '../supabase.js'
+import { useEffect, useRef, useState } from 'react'
+import {
+  supabase, extractUrls, parseTags, youtubeThumb, ymd,
+  parseImages, joinImages, uploadImage, imageFilesFromPaste, imageFilesFromDrop, MAX_IMAGES
+} from '../supabase.js'
 import { useEscapeKey } from '../hooks.js'
 
 // youtu.be/abc123 형태로 줄인다
@@ -25,16 +28,21 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   const [slotId, setSlotId] = useState(item?.slot_id ?? null)
   const [linkUrl, setLinkUrl] = useState(item?.link_url ?? '')
   const [tagsText, setTagsText] = useState((item?.tags ?? []).join(', '))
-  const [imageUrl, setImageUrl] = useState(item?.image_url ?? null)
-  const [file, setFile] = useState(null)
-  const [preview, setPreview] = useState(null)
+  // 이미지는 고를 때 바로 올린다. 그래야 스크린샷을 붙여넣는 순간 썸네일이 뜨고
+  // 진행 상태를 보여 줄 수 있다. (대신 저장하지 않고 닫으면 올라간 파일은 남는다)
+  const [images, setImages] = useState(parseImages(item?.image_url))
+  const [uploading, setUploading] = useState(0) // 올리는 중인 장수
+  const [dragOver, setDragOver] = useState(false)
+  const [zoom, setZoom] = useState(null)         // 크게 볼 이미지 URL
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const fileRef = useRef(null)
 
   // 수정 모드에서 DB에 저장돼 있는 링크 목록
   const savedLinks = extractUrls(item?.link_url ?? '')
 
-  useEscapeKey(onClose)
+  // 크게 보기가 떠 있으면 Esc 는 그것부터 닫는다 (모달까지 같이 닫히면 쓴 내용이 날아간다)
+  useEscapeKey(() => { if (zoom) setZoom(null); else onClose() })
 
   // 수정 모드: 기존 소속을 item_categories 에서 불러온다
   useEffect(() => {
@@ -50,38 +58,76 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     return () => { alive = false }
   }, [item?.id])
 
-  useEffect(() => {
-    if (!file) { setPreview(null); return }
-    const url = URL.createObjectURL(file)
-    setPreview(url)
-    return () => URL.revokeObjectURL(url)
-  }, [file])
+  // 파일 여러 개를 받아 순서대로 올린다. 하나가 실패해도 나머지는 계속 간다.
+  async function addFiles(files) {
+    const list = [...files].filter((f) => f.type.startsWith('image/'))
+    if (list.length === 0) return
+
+    const room = MAX_IMAGES - images.length
+    if (room <= 0) {
+      setError(`이미지는 최대 ${MAX_IMAGES}장까지예요`)
+      return
+    }
+    const take = list.slice(0, room)
+    if (list.length > room) setError(`${MAX_IMAGES}장까지만 올려서 ${take.length}장만 담았어요`)
+    else setError('')
+
+    // 더하기로 올린다. 올리는 중에 또 붙여넣으면 덮어쓰기가 돼서 카운터가 먼저 0 이 되고,
+    // 그러면 아직 올라가는 중인데 저장 버튼이 풀린다.
+    setUploading((n) => n + take.length)
+    let failed = 0
+    for (const f of take) {
+      try {
+        const url = await uploadImage(f, userId)
+        // 상한은 넣는 자리에서 한 번 더 막는다 (연속 붙여넣기로 room 계산이 겹칠 수 있다)
+        setImages((prev) => (
+          prev.includes(url) || prev.length >= MAX_IMAGES ? prev : [...prev, url]
+        ))
+      } catch (err) {
+        failed += 1
+        console.error('이미지 업로드 실패:', err)
+      } finally {
+        setUploading((n) => Math.max(0, n - 1))
+      }
+    }
+    if (failed > 0) setError(`이미지 ${failed}장을 올리지 못했어요. 연결 상태를 확인해 주세요.`)
+  }
+
+  function handlePaste(e) {
+    const files = imageFilesFromPaste(e)
+    if (files.length === 0) return // 이미지가 아니면 평소대로 텍스트 붙여넣기
+    e.preventDefault()
+    addFiles(files)
+  }
+
+  function handleDrop(e) {
+    const files = imageFilesFromDrop(e)
+    setDragOver(false)
+    if (files.length === 0) return
+    e.preventDefault()
+    addFiles(files)
+  }
 
   async function handleSave() {
     if (!title.trim()) {
       setError('제목을 입력해 주세요')
       return
     }
+    if (uploading > 0) {
+      setError('이미지를 올리는 중이에요. 끝나면 저장해 주세요.')
+      return
+    }
     setBusy(true)
     setError('')
     try {
-      let finalImageUrl = imageUrl
-
-      if (file) {
-        const ext = file.name.split('.').pop().toLowerCase()
-        const path = `${userId}/${Date.now()}.${ext}`
-        const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, file)
-        if (upErr) throw upErr
-        const { data } = supabase.storage.from(BUCKET).getPublicUrl(path)
-        finalImageUrl = data.publicUrl
-      }
+      let finalImages = images
 
       const links = extractUrls(linkUrl)
       const cleanLink = links.length > 0 ? links.join('\n') : null
-      if (!finalImageUrl && links.length > 0) {
-        // 썸네일은 첫 번째 유튜브 링크 기준
+      if (finalImages.length === 0 && links.length > 0) {
+        // 대표 이미지가 없으면 첫 번째 유튜브 링크의 썸네일을 쓴다
         const thumb = links.map(youtubeThumb).find(Boolean)
-        if (thumb) finalImageUrl = thumb
+        if (thumb) finalImages = [thumb]
       }
 
       const payload = {
@@ -94,7 +140,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
         due_date: status === 'todo' ? (dueDate || null) : null,
         slot_id: status === 'todo' ? slotId : null,
         link_url: cleanLink,
-        image_url: finalImageUrl,
+        image_url: joinImages(finalImages),
         user_id: userId
       }
 
@@ -144,7 +190,13 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label={isEdit ? '항목 수정' : '새 항목'}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={isEdit ? '항목 수정' : '새 항목'}
+        onPaste={handlePaste}
+      >
         <div className="modal-head">
           <h2>{isEdit ? '항목 수정' : '새 항목'}</h2>
           <button className="btn-ghost btn-sm" onClick={onClose} aria-label="닫기">✕</button>
@@ -309,23 +361,67 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
         </label>
 
         <div className="field">
-          이미지
-          {(preview || imageUrl) ? (
-            <div className="img-slot">
-              <img src={preview || imageUrl} alt="첨부 이미지 미리보기" />
-              <button
-                type="button"
-                className="btn-ghost btn-sm"
-                onClick={() => { setFile(null); setImageUrl(null) }}
-              >이미지 제거</button>
+          이미지 {images.length > 0 && `(${images.length}/${MAX_IMAGES})`}
+
+          <div
+            className={`img-drop ${dragOver ? 'img-drop-on' : ''}`}
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleDrop}
+          >
+            {images.length > 0 && (
+              <div className="img-strip">
+                {images.map((url, i) => (
+                  <div className="img-thumb" key={url}>
+                    <button
+                      type="button"
+                      className="img-thumb-open"
+                      onClick={() => setZoom(url)}
+                      aria-label={`${i + 1}번째 이미지 크게 보기`}
+                    >
+                      <img src={url} alt="" loading="lazy" decoding="async" />
+                    </button>
+                    <button
+                      type="button"
+                      className="img-thumb-x"
+                      onClick={() => setImages((prev) => prev.filter((u) => u !== url))}
+                      aria-label={`${i + 1}번째 이미지 제거`}
+                    >✕</button>
+                    {i === 0 && <span className="img-thumb-tag">대표</span>}
+                  </div>
+                ))}
+                {uploading > 0 && (
+                  <div className="img-thumb img-thumb-busy" aria-live="polite">
+                    <span className="img-spin" aria-hidden="true" />
+                    <span className="img-busy-text">{uploading}장 올리는 중…</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {images.length === 0 && uploading > 0 && (
+              <p className="img-hint" aria-live="polite">{uploading}장 올리는 중…</p>
+            )}
+
+            <div className="img-actions">
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="img-file"
+                onChange={(e) => {
+                  addFiles(e.target.files ?? [])
+                  e.target.value = '' // 같은 파일을 다시 골라도 변화가 잡히게
+                }}
+                disabled={images.length >= MAX_IMAGES}
+              />
+              <p className="img-hint">
+                붙여넣기(Ctrl+V)·끌어놓기로도 올릴 수 있어요 · 최대 {MAX_IMAGES}장 ·
+                긴 변 1600px 넘으면 줄여서 올려요
+              </p>
             </div>
-          ) : (
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            />
-          )}
+          </div>
         </div>
 
         {error && <p className="form-error" role="alert">{error}</p>}
@@ -336,12 +432,25 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
           )}
           <div className="modal-foot-right">
             <button className="btn-ghost" onClick={onClose} disabled={busy}>취소</button>
-            <button className="btn-primary" onClick={handleSave} disabled={busy}>
-              {busy ? '저장 중...' : '저장'}
+            <button className="btn-primary" onClick={handleSave} disabled={busy || uploading > 0}>
+              {busy ? '저장 중...' : uploading > 0 ? '이미지 올리는 중...' : '저장'}
             </button>
           </div>
         </div>
       </div>
+
+      {zoom && (
+        <div
+          className="img-zoom"
+          role="dialog"
+          aria-modal="true"
+          aria-label="이미지 크게 보기"
+          onMouseDown={() => setZoom(null)}
+        >
+          <img src={zoom} alt="" />
+          <button className="img-zoom-x" onClick={() => setZoom(null)} aria-label="닫기">✕</button>
+        </div>
+      )}
     </div>
   )
 }

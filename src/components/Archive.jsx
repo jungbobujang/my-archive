@@ -1,7 +1,10 @@
 // 로그인 후의 메인 화면. '오늘' 탭과 '아카이브' 탭을 함께 들고 있고,
 // 목록 조회·필터·페이지네이션과 모달 열림 상태를 여기서 관리한다.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { supabase, PAGE_SIZE, subtreeIds, childrenOf, fetchAllRows } from '../supabase.js'
+import {
+  supabase, PAGE_SIZE, subtreeIds, childrenOf, fetchAllRows,
+  joinImages, uploadImage, imageFilesFromPaste, imageFilesFromDrop, ymd, MAX_IMAGES
+} from '../supabase.js'
 import { useTheme } from '../theme.js'
 import { useToast } from './Toast.jsx'
 import ItemModal from './ItemModal.jsx'
@@ -48,6 +51,8 @@ export default function Archive({ session, onNavigate }) {
 
   const [quickText, setQuickText] = useState('')
   const [quickBusy, setQuickBusy] = useState(false)
+  const [quickUpload, setQuickUpload] = useState(0)  // 빠른 저장에서 올리는 중인 장수
+  const [quickDrag, setQuickDrag] = useState(false)
 
   const [modalItem, setModalItem] = useState(undefined) // undefined=닫힘, null=새 항목, 객체=수정
   const pageRef = useRef(0)
@@ -316,6 +321,58 @@ export default function Archive({ session, onNavigate }) {
     refresh()
   }
 
+  // 빠른 저장에 이미지를 붙여넣거나 끌어놓으면 바로 한 항목으로 저장한다.
+  // 제목은 입력 중인 글이 있으면 그걸 쓰고(!로 시작하면 할 것), 비어 있으면 날짜로 만든다.
+  async function quickSaveImages(files) {
+    const list = [...files].filter((f) => f.type.startsWith('image/')).slice(0, MAX_IMAGES)
+    if (list.length === 0 || quickBusy || quickUpload > 0) return
+
+    const raw = quickText.trim()
+    const isTodo = raw.startsWith('!')
+    const typed = (isTodo ? raw.slice(1) : raw).trim()
+    const title = typed || `이미지 ${ymd(new Date())}`
+
+    setQuickUpload(list.length)
+    const urls = []
+    let failed = 0
+    for (const f of list) {
+      try {
+        urls.push(await uploadImage(f, session.user.id))
+      } catch (err) {
+        failed += 1
+        console.error('이미지 업로드 실패:', err)
+      } finally {
+        setQuickUpload((n) => Math.max(0, n - 1))
+      }
+    }
+
+    if (urls.length === 0) {
+      toast.error('이미지를 올리지 못했어요. 연결 상태를 확인해 주세요')
+      return
+    }
+
+    const { error } = await supabase.from('items').insert({
+      title,
+      content: '',
+      category_id: null,
+      tags: [],
+      status: isTodo ? 'todo' : 'none',
+      image_url: joinImages(urls),
+      user_id: session.user.id
+    })
+    if (error) {
+      toast.error('저장하지 못했어요. 연결 상태를 확인해 주세요')
+      return
+    }
+    setQuickText('')
+    toast.success(
+      failed > 0
+        ? `이미지 ${urls.length}장 저장 (${failed}장 실패)`
+        : `이미지 ${urls.length}장을 "${title}" 로 저장했어요`
+    )
+    refresh()
+  }
+
   async function exportBackup() {
     setExporting(true)
     try {
@@ -564,18 +621,45 @@ export default function Archive({ session, onNavigate }) {
       </div>
       )}
 
-      <form className="quick-row" onSubmit={quickSave}>
+      <form
+        className={`quick-row ${quickDrag ? 'quick-row-drop' : ''}`}
+        onSubmit={quickSave}
+        onDragOver={(e) => { e.preventDefault(); setQuickDrag(true) }}
+        onDragLeave={() => setQuickDrag(false)}
+        onDrop={(e) => {
+          const files = imageFilesFromDrop(e)
+          setQuickDrag(false)
+          if (files.length === 0) return
+          e.preventDefault()
+          quickSaveImages(files)
+        }}
+      >
         <span className="quick-icon" aria-hidden="true">⚡</span>
         <input
           value={quickText}
           onChange={(e) => setQuickText(e.target.value)}
+          onPaste={(e) => {
+            const files = imageFilesFromPaste(e)
+            if (files.length === 0) return // 이미지가 아니면 평소대로 텍스트 붙여넣기
+            e.preventDefault()
+            quickSaveImages(files)
+          }}
           placeholder="빠른 저장 — 입력 후 엔터"
           aria-label="빠른 저장"
+          disabled={quickUpload > 0}
         />
-        <button type="submit" className="btn-primary btn-sm" disabled={quickBusy || !quickText.trim()}>저장</button>
+        <button
+          type="submit"
+          className="btn-primary btn-sm"
+          disabled={quickBusy || quickUpload > 0 || !quickText.trim()}
+        >저장</button>
       </form>
       {/* 좁은 화면에서는 placeholder 에 다 담기지 않아, 입력 중에만 힌트를 보여 준다 */}
-      <p className="quick-hint">!로 시작하면 &lsquo;할 것&rsquo;으로 저장돼요</p>
+      <p className="quick-hint" aria-live="polite">
+        {quickUpload > 0
+          ? `이미지 ${quickUpload}장 올리는 중…`
+          : '!로 시작하면 ‘할 것’으로 저장돼요 · 이미지는 붙여넣기(Ctrl+V)로 바로 저장'}
+      </p>
 
       {tab === 'today' && (
         <Today

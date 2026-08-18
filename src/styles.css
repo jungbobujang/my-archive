@@ -375,6 +375,7 @@ a:focus-visible {
   padding: 0;
   background: var(--bg);
   width: 100%;
+  position: relative; /* '외 N장' 뱃지의 기준 */
 }
 .card-thumb img {
   width: 100%;
@@ -635,12 +636,142 @@ a:focus-visible {
 }
 .field input:focus, .field textarea:focus { border-color: var(--accent); outline: none; }
 .cat-select { display: flex; gap: 6px; flex-wrap: wrap; }
-.img-slot { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
-.img-slot img {
-  max-width: 100%;
-  max-height: 220px;
+/* ---------- 이미지 첨부 (여러 장) ---------- */
+.img-drop {
+  border: 1px dashed var(--line);
   border-radius: var(--radius);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.img-drop-on { border-color: var(--accent); background: var(--bg); }
+
+/* 가로 한 줄. 넘치면 옆으로 스크롤한다 — 줄바꿈시키면 모달이 세로로 길어진다. */
+.img-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+.img-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 84px;
+  height: 84px;
+  border-radius: var(--radius);
+  overflow: hidden;
   border: 1px solid var(--line);
+  background: var(--bg);
+}
+.img-thumb-open {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+}
+.img-thumb-open img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.img-thumb-x {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .58);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.img-thumb-x:hover { background: rgba(0, 0, 0, .8); }
+.img-thumb-tag {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  padding: 1px 6px;
+  font-size: 10px;
+  color: #fff;
+  background: rgba(0, 0, 0, .55);
+  border-top-right-radius: var(--radius);
+}
+.img-thumb-busy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-style: dashed;
+}
+.img-busy-text { font-size: 10px; color: var(--ink-faint); text-align: center; }
+.img-spin {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: img-spin 0.8s linear infinite;
+}
+@keyframes img-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .img-spin { animation-duration: 3s; }
+}
+
+.img-actions { display: flex; flex-direction: column; gap: 4px; }
+.img-file { font-size: 13px; }
+.img-hint { margin: 0; font-size: 12px; color: var(--ink-faint); line-height: 1.5; }
+
+/* 크게 보기 */
+.img-zoom {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, .82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  cursor: zoom-out;
+}
+.img-zoom img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius);
+}
+.img-zoom-x {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .16);
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+}
+.img-zoom-x:hover { background: rgba(255, 255, 255, .3); }
+
+/* 카드 대표 이미지 위의 '외 N장' */
+.thumb-more {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, .62);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  pointer-events: none;
 }
 .modal-foot {
   display: flex;
@@ -711,6 +842,8 @@ a:focus-visible {
   margin-bottom: 10px;
 }
 .quick-row:focus-within { border-color: var(--accent); border-style: solid; }
+/* 이미지를 끌고 왔을 때 — 여기 놓으면 된다는 표시 */
+.quick-row-drop { border-color: var(--accent); background: var(--bg); }
 .quick-icon { font-size: 14px; }
 .quick-row input {
   flex: 1;
@@ -1506,6 +1639,21 @@ a.card-thumb { cursor: pointer; }
   /* 링크 칸(.link-input)은 스스로 높이를 늘리고 overflow:hidden 이라 제외한다 —
      상한을 걸면 링크가 잘려 보이지 않는다 */
   .field textarea:not(.link-input) { max-height: 38dvh; }
+
+  /* 썸네일 스트립: 지우기 X 와 파일 고르기가 손가락 크기여야 한다.
+     스트립 자체는 가로 스크롤이라 장수가 늘어도 폭이 넘치지 않는다. */
+  .img-thumb { width: 76px; height: 76px; }
+  .img-thumb-x { width: 28px; height: 28px; font-size: 13px; }
+  /* 시각 크기는 그대로 두고 손가락 범위만 넓힌다(.star·.check 와 같은 방식).
+     44px 를 다 주면 76px 썸네일의 3분의 1을 덮어 '눌러서 크게 보기'를 가로챈다.
+     40px 까지만 넓히고, 크게 보기는 남는 아래·왼쪽 영역이 받는다. */
+  .img-thumb-x::after { content: ''; position: absolute; inset: -6px; }
+  .img-file { min-height: 44px; font-size: 16px; }
+  /* 파일 선택 버튼이 375px 를 넘지 않게 (기본 위젯이 파일명을 그대로 늘린다) */
+  .img-actions, .img-drop { min-width: 0; }
+  .img-file { max-width: 100%; }
+  .img-zoom { padding: 12px; }
+  .img-zoom-x { top: 8px; right: 8px; }
 
     /* 마인드맵은 가로 스크롤이 되는 캔버스다. 축소돼도 글자가 읽히게 키운다. */
   .mm-label { font-size: 16px; }

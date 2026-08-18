@@ -21,6 +21,115 @@ export const PAGE_SIZE = 24
 export const BUCKET = 'archive-images'
 export const MAX_TAGS = 10
 
+// ---------- 이미지 ----------
+//
+// 여러 장을 items.image_url 한 열에 줄바꿈으로 담는다. 별도 표(item_images)를 두지 않은 이유:
+//   · 같은 표의 link_url 이 이미 같은 방식이다 — 짧은 URL 목록, 순서만 있고 부가 정보가 없다.
+//   · 옮길 데이터가 없다. 기존 한 줄짜리 값이 그대로 '1장짜리 목록'이다.
+//   · 목록 조회가 그대로다. Archive 는 items 를 24개씩 select('*') 로 받는데,
+//     표를 나누면 페이지마다 조회가 한 번 더 붙고(item_categories 처럼) 그 매핑을
+//     Today·Trash·MindMap 에도 따로 만들어야 한다.
+//   · 백업이 그대로다. 내보내기/가져오기가 표 목록을 훑는 구조라 표가 늘면 양쪽을 다 고쳐야
+//     하는데, 이 저장소는 예전에 time_slots 를 백업에서 빠뜨린 적이 있다(bf13b2b).
+// 한 장당 캡션 같은 부가 정보가 필요해지면 그때 표로 정규화한다.
+export const MAX_IMAGES = 10
+export const IMAGE_MAX_EDGE = 1600 // 긴 변이 이보다 크면 줄여서 올린다
+
+export function parseImages(text) {
+  if (!text) return []
+  const seen = new Set()
+  const out = []
+  for (const line of String(text).split('\n')) {
+    const url = line.trim()
+    if (!url || seen.has(url)) continue
+    seen.add(url)
+    out.push(url)
+  }
+  return out
+}
+
+export function joinImages(list) {
+  const clean = parseImages((list ?? []).join('\n'))
+  return clean.length > 0 ? clean.join('\n') : null
+}
+
+const extOf = (type) => (type === 'image/png' ? 'png' : type === 'image/webp' ? 'webp' : 'jpg')
+
+// 긴 변을 maxEdge 로 줄인다(비율 유지). 이미 작으면 원본을 그대로 돌려준다.
+// GIF 는 건드리지 않는다 — 캔버스로 다시 그리면 첫 장만 남아 움직임이 죽는다.
+export async function resizeImage(file, maxEdge = IMAGE_MAX_EDGE) {
+  if (!file?.type?.startsWith('image/')) return file
+  if (file.type === 'image/gif' || file.type === 'image/svg+xml') return file
+
+  let bitmap
+  try {
+    bitmap = await createImageBitmap(file)
+  } catch {
+    return file // 디코딩 못 하면 원본을 그대로 올린다
+  }
+
+  const long = Math.max(bitmap.width, bitmap.height)
+  if (long <= maxEdge) {
+    bitmap.close?.()
+    return file
+  }
+
+  const scale = maxEdge / long
+  const w = Math.round(bitmap.width * scale)
+  const h = Math.round(bitmap.height * scale)
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h)
+  bitmap.close?.()
+
+  // webp 가 같은 화질에 더 작다. 인코더가 없으면(구형 사파리) jpeg 로 물러선다.
+  const toBlob = (type, q) => new Promise((r) => canvas.toBlob(r, type, q))
+  let blob = await toBlob('image/webp', 0.9)
+  let type = 'image/webp'
+  if (!blob || blob.type !== 'image/webp') {
+    blob = await toBlob('image/jpeg', 0.85)
+    type = 'image/jpeg'
+  }
+  if (!blob) return file
+  // 줄였는데 오히려 커지는 경우(작은 png 등)는 원본을 쓴다
+  if (blob.size >= file.size) return file
+
+  const base = (file.name || 'image').replace(/\.[^.]+$/, '')
+  return new File([blob], `${base}.${extOf(type)}`, { type })
+}
+
+// 리사이즈 → 업로드 → 공개 URL. 같은 밀리초에 여러 장을 올려도 겹치지 않게 뒤에 난수를 붙인다.
+export async function uploadImage(file, userId) {
+  const ready = await resizeImage(file)
+  const ext = (ready.name?.split('.').pop() || extOf(ready.type)).toLowerCase()
+  const rand = Math.random().toString(36).slice(2, 8)
+  const path = `${userId}/${Date.now()}-${rand}.${ext}`
+  const { error } = await supabase.storage.from(BUCKET).upload(path, ready, {
+    contentType: ready.type || 'image/jpeg'
+  })
+  if (error) throw error
+  const { data } = supabase.storage.from(BUCKET).getPublicUrl(path)
+  return data.publicUrl
+}
+
+// 붙여넣기·드롭에서 이미지 파일만 골라낸다
+export function imageFilesFromPaste(e) {
+  const items = e.clipboardData?.items ?? []
+  const files = []
+  for (const it of items) {
+    if (it.kind === 'file' && it.type.startsWith('image/')) {
+      const f = it.getAsFile()
+      if (f) files.push(f)
+    }
+  }
+  return files
+}
+
+export function imageFilesFromDrop(e) {
+  return [...(e.dataTransfer?.files ?? [])].filter((f) => f.type.startsWith('image/'))
+}
+
 // ---------- 카테고리 트리 ----------
 
 // 자기 자신 + 모든 자손의 id. 순환 참조가 있어도 방문 집합으로 멈춘다.
