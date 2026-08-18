@@ -8,7 +8,14 @@ const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 export const supabase = url && anonKey ? createClient(url, anonKey) : null
 
 export const COLOR_KEYS = ['purple', 'coral', 'teal', 'gray', 'blue', 'amber', 'pink', 'green']
-export const ICON_CHOICES = ['💡', '🎬', '🖼️', '📝', '📚', '🏋️', '✍️', '🔬', '🎨', '📌']
+// 카테고리·시간대 아이콘 고르개. 뒤쪽 10개는 카테고리 시드
+// (supabase/category-seed.sql)에서 쓰는 것들이라, 시드로 만든 카테고리도
+// 화면에서 아이콘을 다시 고를 수 있게 목록에 넣어 둔다.
+// 기존 10개의 순서는 그대로 두고 뒤에 붙였다 — 앞자리가 밀리면 손이 기억하는 자리가 바뀐다.
+export const ICON_CHOICES = [
+  '💡', '🎬', '🖼️', '📝', '📚', '🏋️', '✍️', '🔬', '🎨', '📌',
+  '📺', '🏫', '⚙️', '🧠', '📊', '🌍', '🗂', '✅', '🔧', '💎'
+]
 
 export const PAGE_SIZE = 24
 export const BUCKET = 'archive-images'
