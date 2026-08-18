@@ -21,7 +21,7 @@
 --   🧠 뇌지컬   (purple, 4) — 💎 배움·통찰 · 📖 공부법
 --   💪 피지컬   (green,  5) — 🏋️ 운동 · ✨ 외모·피부 · 🥗 건강·식단
 --   🍜 생활     (amber,  6) — 🍚 맛집·음식 · 🛒 쇼핑·꿀팁 · 🗺 가볼 곳
---                              └ 🍚 맛집·음식 아래 3단: 🇰🇷 국내 · ✈️ 해외 · 📌 기타(레시피·식품류)
+--                              └ 🍚 맛집·음식 아래 3단: 🏠 국내 · ✈️ 해외 · 📌 기타(레시피·식품류)
 --   💰 재테크   (pink,   7) — 📈 돈 공부 · 💵 투자 메모
 --   📝 기타 메모 (gray,   8) — 하위 없음. 분류 애매한 것 전부.
 --
@@ -210,6 +210,17 @@ begin
   -- ── 5) 3단계 (맛집·음식 아래) ──────────────────────────────
   -- 유일한 3단이다. 상위를 '이름' 이 아니라 '2단 노드의 id' 로 찾아야 한다 —
   -- 여기서 parent_id is null 로 찾으면 최상위 중에 없으니 못 찾는다.
+
+  -- 먼저 옛 아이콘 정리: 국내를 🇰🇷 로 만들어 둔 적이 있다.
+  -- Windows 는 국기 이모지 폰트가 없어 태극기가 아니라 'KR' 글자로 보인다 → 🏠 로 바꾼다.
+  -- (아래 루프가 손대지 못하는 경우 — 이미 다른 상위에 붙어 있는 '국내' — 까지 덮는다)
+  update public.categories
+     set icon = '🏠'
+   where user_id = uid and name = '국내' and icon = '🇰🇷';
+  if found then
+    raise notice '  아이콘 정리: 국내 🇰🇷 → 🏠 (Windows 에서 국기가 KR 글자로 보임)';
+  end if;
+
   select id into v_gparent
     from public.categories
    where user_id = uid and name = '맛집·음식'
@@ -220,7 +231,7 @@ begin
   else
     for rec in
       select * from (values
-        ('국내',              '🇰🇷', 'amber', 1),
+        ('국내',              '🏠', 'amber', 1),
         ('해외',              '✈️', 'amber', 2),
         ('기타(레시피·식품류)', '📌', 'amber', 3)
       ) as t(nm, ic, col, pos)
