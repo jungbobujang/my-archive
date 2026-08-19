@@ -7,7 +7,7 @@
 
 기술 스택: Vite + React 18 + Supabase (DB / Storage / Auth)
 
-공통 표준: [dev-standards.md](../dev-standards.md) 참조
+공통 개발 표준: [github.com/jungbobujang/dev-standards](https://github.com/jungbobujang/dev-standards)
 
 ---
 
