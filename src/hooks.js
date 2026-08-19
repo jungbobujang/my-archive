@@ -18,6 +18,39 @@ export function useVisualViewport() {
   }, [])
 }
 
+// ── 작성 중인 내용 임시 보존 ─────────────────────────────────────────────
+// 모달이 어떤 이유로든 닫히거나 탭이 새로고침돼도 쓰던 값이 남아 있게 한다.
+// sessionStorage 를 쓰는 이유: 탭을 닫으면 같이 사라진다. localStorage 였다면
+// 몇 달 전에 쓰다 만 초안이 계속 되살아난다.
+// 키는 항목 id 기준이라 여러 항목을 오가며 편집해도 서로 안 섞인다 (새 항목은 'new').
+export function draftKeyFor(itemId) {
+  return `ma:draft:${itemId ?? 'new'}`
+}
+
+export function readDraft(key) {
+  try {
+    const raw = sessionStorage.getItem(key)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null // 시크릿 모드·용량 초과 등. 초안이 없는 것과 같게 다룬다.
+  }
+}
+
+export function writeDraft(key, value) {
+  try {
+    sessionStorage.setItem(key, JSON.stringify(value))
+  } catch (err) {
+    // 저장 못 해도 작성 자체는 계속돼야 한다. 조용히 삼키지는 않는다.
+    console.warn('[draft] 임시 저장 실패:', err)
+  }
+}
+
+export function clearDraft(key) {
+  try {
+    sessionStorage.removeItem(key)
+  } catch { /* 지우기 실패는 무시해도 된다 */ }
+}
+
 // Esc 로 닫기. 모달 5곳에 같은 코드가 있었고, 그중 일부는 의존성 배열이 없어
 // 매 렌더마다 리스너를 붙였다 뗐다 했다.
 export function useEscapeKey(handler, enabled = true) {

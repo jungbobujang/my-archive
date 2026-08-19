@@ -9,7 +9,7 @@ import {
   parseImages, joinImages, uploadImage, imageFilesFromPaste, imageFilesFromDrop, MAX_IMAGES,
   treeOrder, categoryPath
 } from '../supabase.js'
-import { useEscapeKey } from '../hooks.js'
+import { useEscapeKey, draftKeyFor, readDraft, writeDraft, clearDraft } from '../hooks.js'
 
 // youtu.be/abc123 형태로 줄인다
 function shortenUrl(url) {
@@ -25,17 +25,28 @@ function shortenUrl(url) {
 
 export default function ItemModal({ item, categories, slots, userId, onClose, onSaved }) {
   const isEdit = !!item
-  const [title, setTitle] = useState(item?.title ?? '')
-  const [content, setContent] = useState(item?.content ?? '')
-  const [categoryIds, setCategoryIds] = useState(item?.category_id ? [item.category_id] : [])
-  const [status, setStatus] = useState(item?.status ?? 'none')
-  const [dueDate, setDueDate] = useState(item?.due_date ?? '')
-  const [slotId, setSlotId] = useState(item?.slot_id ?? null)
-  const [linkUrl, setLinkUrl] = useState(item?.link_url ?? '')
-  const [tagsText, setTagsText] = useState((item?.tags ?? []).join(', '))
+
+  // 이 항목의 임시본. 렌더 중 한 번만 읽는다 (이후 값은 state 가 들고 있다).
+  const draftKey = draftKeyFor(item?.id)
+  const [draft] = useState(() => readDraft(draftKey))
+  const [restored, setRestored] = useState(!!draft) // 되살렸다는 안내를 띄울지
+
+  // 초안이 있으면 초안이 이긴다. 없으면 DB 값(수정) 또는 빈 값(새 항목).
+  const [title, setTitle] = useState(draft?.title ?? item?.title ?? '')
+  const [content, setContent] = useState(draft?.content ?? item?.content ?? '')
+  const [categoryIds, setCategoryIds] = useState(
+    draft?.categoryIds ?? (item?.category_id ? [item.category_id] : [])
+  )
+  const [status, setStatus] = useState(draft?.status ?? item?.status ?? 'none')
+  const [dueDate, setDueDate] = useState(draft?.dueDate ?? item?.due_date ?? '')
+  const [slotId, setSlotId] = useState(draft?.slotId ?? item?.slot_id ?? null)
+  const [linkUrl, setLinkUrl] = useState(draft?.linkUrl ?? item?.link_url ?? '')
+  const [tagsText, setTagsText] = useState(draft?.tagsText ?? (item?.tags ?? []).join(', '))
   // 이미지는 고를 때 바로 올린다. 그래야 스크린샷을 붙여넣는 순간 썸네일이 뜨고
   // 진행 상태를 보여 줄 수 있다. (대신 저장하지 않고 닫으면 올라간 파일은 남는다)
-  const [images, setImages] = useState(parseImages(item?.image_url))
+  // 이미지 URL 도 초안에 넣는다. 파일은 고르는 즉시 스토리지에 올라가 있으므로,
+  // 여기서 잃으면 올라간 파일만 남고 화면에서는 사라진다(고아 파일).
+  const [images, setImages] = useState(draft?.images ?? parseImages(item?.image_url))
   const [uploading, setUploading] = useState(0) // 올리는 중인 장수
   const [dragOver, setDragOver] = useState(false)
   const [zoom, setZoom] = useState(null)         // 크게 볼 이미지 URL
@@ -44,7 +55,13 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   const fileRef = useRef(null)
 
   // 링크마다 개별 항목으로 나눌지 (링크가 2개 이상일 때만 고를 수 있다)
-  const [splitMode, setSplitMode] = useState(false)
+  const [splitMode, setSplitMode] = useState(draft?.splitMode ?? false)
+
+  // '바뀌었는지' 를 재는 기준선. 수정 모드의 소속은 아래에서 비동기로 불러오므로
+  // 그때 같이 갱신한다 — 안 그러면 열자마자 '바뀜' 으로 잡혀 Esc 마다 확인창이 뜬다.
+  const [baseCategoryIds, setBaseCategoryIds] = useState(
+    item?.category_id ? [item.category_id] : []
+  )
   const [progress, setProgress] = useState(null) // { done, total }
 
   const links = useMemo(() => extractUrls(linkUrl), [linkUrl])
@@ -57,8 +74,54 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   // 수정 모드에서 DB에 저장돼 있는 링크 목록
   const savedLinks = extractUrls(item?.link_url ?? '')
 
+  // 열었을 때와 견줘 하나라도 달라졌는지. '내용이 있는지' 가 아니라 '바뀌었는지' 로 잰다 —
+  // 수정 모달은 열자마자 내용이 차 있으므로, 내용 유무로 재면 Esc 마다 확인창이 뜬다.
+  const sameSet = (a, b) => a.length === b.length && [...a].sort().join() === [...b].sort().join()
+  const dirty =
+    title !== (item?.title ?? '') ||
+    content !== (item?.content ?? '') ||
+    linkUrl !== (item?.link_url ?? '') ||
+    tagsText !== (item?.tags ?? []).join(', ') ||
+    status !== (item?.status ?? 'none') ||
+    dueDate !== (item?.due_date ?? '') ||
+    slotId !== (item?.slot_id ?? null) ||
+    joinImages(images) !== joinImages(parseImages(item?.image_url)) ||
+    !sameSet(categoryIds, baseCategoryIds)
+
+  // 작성 중인 값을 sessionStorage 에 남긴다. 바뀐 게 없으면 남길 것도 없다.
+  useEffect(() => {
+    if (!dirty) { clearDraft(draftKey); return }
+    writeDraft(draftKey, {
+      title, content, linkUrl, tagsText, categoryIds, status, dueDate, slotId, images, splitMode
+    })
+  }, [draftKey, dirty, title, content, linkUrl, tagsText, categoryIds, status, dueDate, slotId, images, splitMode])
+
+  // Esc 는 손이 미끄러지기 쉬운 자리라, 쓰던 게 있으면 한 번 물어본다.
+  // ✕·취소는 눌러야 닿는 자리라 그냥 닫는다 (어차피 초안은 남는다).
+  function closeFromEscape() {
+    if (dirty && !window.confirm('작성 중인 내용이 있습니다. 닫을까요?')) return
+    onClose()
+  }
+
   // 크게 보기가 떠 있으면 Esc 는 그것부터 닫는다 (모달까지 같이 닫히면 쓴 내용이 날아간다)
-  useEscapeKey(() => { if (zoom) setZoom(null); else onClose() })
+  useEscapeKey(() => { if (zoom) setZoom(null); else closeFromEscape() })
+
+  // 되살린 초안을 버리고 처음 상태로 되돌린다
+  function discardDraft() {
+    clearDraft(draftKey)
+    setTitle(item?.title ?? '')
+    setContent(item?.content ?? '')
+    setLinkUrl(item?.link_url ?? '')
+    setTagsText((item?.tags ?? []).join(', '))
+    setCategoryIds(baseCategoryIds)
+    setStatus(item?.status ?? 'none')
+    setDueDate(item?.due_date ?? '')
+    setSlotId(item?.slot_id ?? null)
+    setImages(parseImages(item?.image_url))
+    setSplitMode(false)
+    setRestored(false)
+    setError('')
+  }
 
   // 수정 모드: 기존 소속을 item_categories 에서 불러온다
   useEffect(() => {
@@ -69,7 +132,11 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
         .from('item_categories')
         .select('category_id')
         .eq('item_id', item.id)
-      if (alive && !err && data) setCategoryIds(data.map((r) => r.category_id))
+      if (!alive || err || !data) return
+      const ids = data.map((r) => r.category_id)
+      setBaseCategoryIds(ids)
+      // 초안에 소속이 들어 있으면 그쪽이 이긴다 (사용자가 고쳐 둔 값을 DB 값으로 덮지 않는다)
+      if (!draft?.categoryIds) setCategoryIds(ids)
     })()
     return () => { alive = false }
   }, [item?.id])
@@ -211,6 +278,8 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
         if (made < links.length) {
           setError(`${made}개 저장 (${links.length - made}개 실패)`)
         }
+        clearDraft(draftKey)
+
         onSaved()
         return
       }
@@ -243,6 +312,9 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
         await insertOne(payload)
       }
 
+      clearDraft(draftKey)
+
+
       onSaved()
     } catch (err) {
       setError('저장에 실패했어요. 네트워크와 Supabase 설정을 확인해 주세요.')
@@ -265,11 +337,16 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
       setBusy(false)
       return
     }
+    clearDraft(draftKey)
+
     onSaved()
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+    // 배경을 눌러도 닫지 않는다. 긴 글을 쓰는 창이라 한 번 잘못 닿으면 손해가 크고,
+    // 특히 폰에서는 모달이 화면을 다 채우지 않아 가장자리 탭이 바로 배경에 닿는다.
+    // 닫는 길은 ✕ · 취소 · Esc 세 가지뿐.
+    <div className="modal-backdrop">
       <div
         className="modal"
         role="dialog"
@@ -281,6 +358,15 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
           <h2>{isEdit ? '항목 수정' : '새 항목'}</h2>
           <button className="btn-ghost btn-sm" onClick={onClose} aria-label="닫기">✕</button>
         </div>
+
+        {restored && (
+          <p className="draft-note" role="status">
+            작성 중이던 내용을 되살렸어요.
+            <button type="button" className="btn-ghost btn-sm" onClick={discardDraft}>
+              새로 쓰기
+            </button>
+          </p>
+        )}
 
         <label className="field">
           제목 <span className="field-hint">(비우면 자동으로 지어요)</span>

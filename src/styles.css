@@ -621,6 +621,17 @@ a:focus-visible {
 }
 .modal-head { display: flex; align-items: center; justify-content: space-between; }
 .modal-head h2 { margin: 0; font-size: 17px; }
+
+/* 임시 보관해 둔 내용을 되살렸을 때의 안내. 경고가 아니라 안심시키는 자리라
+   에러 톤(빨강)을 쓰지 않는다. '새로 쓰기' 는 되살린 걸 버리고 빈 화면으로 가는 길 —
+   이게 없으면 지난 초안이 계속 따라와 지울 방법이 없다. */
+.draft-note {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0; padding: 8px 12px; border-radius: 10px;
+  background: var(--accent-soft); color: var(--ink-soft);
+  font-size: 13px; line-height: 1.5;
+}
+.draft-note .btn-sm { margin-left: auto; flex: none; }
 .field {
   display: flex;
   flex-direction: column;
