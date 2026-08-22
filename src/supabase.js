@@ -227,6 +227,24 @@ export function extractUrls(text) {
   return [...new Set(text.match(/https?:\/\/[^\s"'<>]+/g) || [])]
 }
 
+// 사람이 손으로 치거나 앱에서 복사한 링크는 스킴이 빠져 있기 일쑤다("youtu.be/abc").
+// extractUrls 는 http(s) 로 시작하는 것만 잡으므로, 그 앞에 스킴을 붙여 준 뒤 넘긴다.
+// 공백·쉼표·줄바꿈 아무거나로 나눠도 되게 했다 — 여러 개를 한 번에 붙여넣는 자리다.
+const BARE_DOMAIN = /^(?:[\w-]+\.)+[a-z]{2,}(?:[/:?#]|$)/i
+
+export function parseLinks(text) {
+  if (!text) return []
+  const out = []
+  for (const raw of String(text).split(/[\s,]+/)) {
+    if (!raw) continue
+    const withScheme = /^https?:\/\//i.test(raw) ? raw : (BARE_DOMAIN.test(raw) ? `https://${raw}` : null)
+    if (!withScheme) continue
+    const [found] = extractUrls(withScheme)
+    if (found && !out.includes(found)) out.push(found)
+  }
+  return out
+}
+
 export async function fetchLinkTitle(url) {
   try {
     const res = await fetch(`https://noembed.com/embed?url=${encodeURIComponent(url)}`)

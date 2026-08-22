@@ -1,15 +1,17 @@
 // 항목 생성/수정 모달. 저장은 items 한 줄 + item_categories 를 통째로 갈아끼우는 두 단계다.
 //
-// '여러 링크 저장' 모달을 여기로 흡수했다(별도 화면 폐지). 링크를 여러 개 붙여넣으면
-// '한 항목에 모두 담기'(기본)와 '링크마다 개별 항목'을 고르게 하고, 개별 모드가
-// 예전 그 화면이 하던 일(링크마다 noembed 로 제목을 받아 한 건씩 저장)을 그대로 한다.
+// '여러 링크 저장' 모달을 여기로 흡수했다(별도 화면 폐지). 링크는 한 줄짜리 입력칸으로
+// 하나씩(또는 여러 개를 한 번에 붙여넣어) 목록에 담고, 목록에서 ✕ 로 뺀다 —
+// 수정 중인 항목의 링크도 같은 목록에서 더하고 뺀다.
+// 링크가 둘 이상이면 '한 항목에 모두 담기'(기본)와 '링크마다 개별 항목'을 고르게 하고,
+// 개별 모드가 예전 그 화면이 하던 일(링크마다 noembed 로 제목을 받아 한 건씩 저장)을 그대로 한다.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  supabase, extractUrls, parseTags, youtubeThumb, ymd, fetchLinkTitle,
+  supabase, extractUrls, parseLinks, parseTags, youtubeThumb, ymd, fetchLinkTitle,
   parseImages, joinImages, uploadImage, imageFilesFromPaste, imageFilesFromDrop, MAX_IMAGES,
   treeOrder, categoryPath
 } from '../supabase.js'
-import { useEscapeKey, draftKeyFor, readDraft, writeDraft, clearDraft } from '../hooks.js'
+import { useEscapeKey, confirmDiscard, draftKeyFor, readDraft, writeDraft, clearDraft } from '../hooks.js'
 
 // youtu.be/abc123 형태로 줄인다
 function shortenUrl(url) {
@@ -40,7 +42,12 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   const [status, setStatus] = useState(draft?.status ?? item?.status ?? 'none')
   const [dueDate, setDueDate] = useState(draft?.dueDate ?? item?.due_date ?? '')
   const [slotId, setSlotId] = useState(draft?.slotId ?? item?.slot_id ?? null)
-  const [linkUrl, setLinkUrl] = useState(draft?.linkUrl ?? item?.link_url ?? '')
+  // 링크는 목록으로 들고 있다. linkInput 은 아직 목록에 담기지 않은, 지금 치고 있는 한 줄.
+  // 예전 초안(linkUrl 한 덩어리)도 읽어 준다 — 새로고침으로 되살릴 때 형식이 바뀌었다고 잃으면 안 된다.
+  const [links, setLinks] = useState(
+    () => draft?.links ?? extractUrls(draft?.linkUrl ?? item?.link_url ?? '')
+  )
+  const [linkInput, setLinkInput] = useState(draft?.linkInput ?? '')
   const [tagsText, setTagsText] = useState(draft?.tagsText ?? (item?.tags ?? []).join(', '))
   // 이미지는 고를 때 바로 올린다. 그래야 스크린샷을 붙여넣는 순간 썸네일이 뜨고
   // 진행 상태를 보여 줄 수 있다. (대신 저장하지 않고 닫으면 올라간 파일은 남는다)
@@ -64,15 +71,20 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   )
   const [progress, setProgress] = useState(null) // { done, total }
 
-  const links = useMemo(() => extractUrls(linkUrl), [linkUrl])
-  const splitting = !isEdit && splitMode && links.length > 1
+  // 입력칸에 쳐 두고 '추가' 를 안 누른 링크도 저장 때는 함께 담는다 (쓴 것을 잃지 않게).
+  const pendingLinks = useMemo(
+    () => parseLinks(linkInput).filter((u) => !links.includes(u)),
+    [linkInput, links]
+  )
+  const allLinks = useMemo(
+    () => (pendingLinks.length > 0 ? [...links, ...pendingLinks] : links),
+    [links, pendingLinks]
+  )
+  const splitting = !isEdit && splitMode && allLinks.length > 1
 
   // 제목·링크·내용·이미지 중 하나라도 있으면 저장할 수 있다. 제목은 이제 필수가 아니다.
   const hasAnything =
-    title.trim().length > 0 || links.length > 0 || content.trim().length > 0 || images.length > 0
-
-  // 수정 모드에서 DB에 저장돼 있는 링크 목록
-  const savedLinks = extractUrls(item?.link_url ?? '')
+    title.trim().length > 0 || allLinks.length > 0 || content.trim().length > 0 || images.length > 0
 
   // 열었을 때와 견줘 하나라도 달라졌는지. '내용이 있는지' 가 아니라 '바뀌었는지' 로 잰다 —
   // 수정 모달은 열자마자 내용이 차 있으므로, 내용 유무로 재면 Esc 마다 확인창이 뜬다.
@@ -80,7 +92,8 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   const dirty =
     title !== (item?.title ?? '') ||
     content !== (item?.content ?? '') ||
-    linkUrl !== (item?.link_url ?? '') ||
+    links.join(' ') !== extractUrls(item?.link_url ?? '').join(' ') ||
+    linkInput.trim() !== '' ||
     tagsText !== (item?.tags ?? []).join(', ') ||
     status !== (item?.status ?? 'none') ||
     dueDate !== (item?.due_date ?? '') ||
@@ -92,14 +105,14 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   useEffect(() => {
     if (!dirty) { clearDraft(draftKey); return }
     writeDraft(draftKey, {
-      title, content, linkUrl, tagsText, categoryIds, status, dueDate, slotId, images, splitMode
+      title, content, links, linkInput, tagsText, categoryIds, status, dueDate, slotId, images, splitMode
     })
-  }, [draftKey, dirty, title, content, linkUrl, tagsText, categoryIds, status, dueDate, slotId, images, splitMode])
+  }, [draftKey, dirty, title, content, links, linkInput, tagsText, categoryIds, status, dueDate, slotId, images, splitMode])
 
   // Esc 는 손이 미끄러지기 쉬운 자리라, 쓰던 게 있으면 한 번 물어본다.
   // ✕·취소는 눌러야 닿는 자리라 그냥 닫는다 (어차피 초안은 남는다).
   function closeFromEscape() {
-    if (dirty && !window.confirm('작성 중인 내용이 있습니다. 닫을까요?')) return
+    if (!confirmDiscard(dirty)) return
     onClose()
   }
 
@@ -111,7 +124,8 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     clearDraft(draftKey)
     setTitle(item?.title ?? '')
     setContent(item?.content ?? '')
-    setLinkUrl(item?.link_url ?? '')
+    setLinks(extractUrls(item?.link_url ?? ''))
+    setLinkInput('')
     setTagsText((item?.tags ?? []).join(', '))
     setCategoryIds(baseCategoryIds)
     setStatus(item?.status ?? 'none')
@@ -140,6 +154,24 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     })()
     return () => { alive = false }
   }, [item?.id])
+
+  // 입력칸의 글을 링크 목록으로 옮긴다. 알아볼 수 없으면 목록은 그대로 두고 입력칸도 남긴다.
+  // silent 는 포커스가 빠져나갈 때 쓴다 — 주소를 치다 만 사람에게 빨간 글씨를 띄우지 않는다.
+  function commitLinkInput(silent = false) {
+    if (!linkInput.trim()) return
+    const found = parseLinks(linkInput)
+    if (found.length === 0) {
+      if (!silent) setError('링크를 알아보지 못했어요. 주소 전체를 붙여넣어 주세요.')
+      return
+    }
+    setLinks((prev) => [...prev, ...found.filter((u) => !prev.includes(u))])
+    setLinkInput('')
+    setError('')
+  }
+
+  function removeLink(url) {
+    setLinks((prev) => prev.filter((u) => u !== url))
+  }
 
   // 파일 여러 개를 받아 순서대로 올린다. 하나가 실패해도 나머지는 계속 간다.
   async function addFiles(files) {
@@ -251,13 +283,15 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     }
     setBusy(true)
     setError('')
+    // 입력칸에 남아 있던 링크까지 포함해 이번 저장에 쓸 목록을 굳힌다
+    const finalLinks = allLinks
     try {
       // ── 링크마다 개별 항목 ─────────────────────────────────
       if (splitting) {
         let made = 0
-        for (let i = 0; i < links.length; i++) {
-          const url = links[i]
-          setProgress({ done: i, total: links.length })
+        for (let i = 0; i < finalLinks.length; i++) {
+          const url = finalLinks[i]
+          setProgress({ done: i, total: finalLinks.length })
           try {
             const fetched = (await fetchLinkTitle(url)) || url
             await insertOne({
@@ -273,10 +307,10 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
             console.error('저장 실패:', url, err) // 하나가 실패해도 나머지는 계속한다
           }
         }
-        setProgress({ done: links.length, total: links.length })
+        setProgress({ done: finalLinks.length, total: finalLinks.length })
         if (made === 0) throw new Error('한 건도 저장하지 못했습니다')
-        if (made < links.length) {
-          setError(`${made}개 저장 (${links.length - made}개 실패)`)
+        if (made < finalLinks.length) {
+          setError(`${made}개 저장 (${finalLinks.length - made}개 실패)`)
         }
         clearDraft(draftKey)
 
@@ -286,14 +320,14 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
 
       // ── 한 항목에 모두 담기 (수정도 이 길) ──────────────────
       let finalImages = images
-      const cleanLink = links.length > 0 ? links.join('\n') : null
-      if (finalImages.length === 0 && links.length > 0) {
+      const cleanLink = finalLinks.length > 0 ? finalLinks.join('\n') : null
+      if (finalImages.length === 0 && finalLinks.length > 0) {
         // 대표 이미지가 없으면 첫 번째 유튜브 링크의 썸네일을 쓴다
-        const thumb = links.map(youtubeThumb).find(Boolean)
+        const thumb = finalLinks.map(youtubeThumb).find(Boolean)
         if (thumb) finalImages = [thumb]
       }
 
-      const finalTitle = title.trim() || (await makeTitle(links[0] ?? null))
+      const finalTitle = title.trim() || (await makeTitle(finalLinks[0] ?? null))
 
       const payload = {
         ...commonFields(),
@@ -374,7 +408,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
             value={title}
             onChange={(e) => { setTitle(e.target.value); setError('') }}
             placeholder={
-              links.length > 0 ? '비우면 링크 제목을 가져옵니다'
+              allLinks.length > 0 ? '비우면 링크 제목을 가져옵니다'
                 : images.length > 0 ? `비우면 '이미지 ${ymd(new Date())}'`
                   : '쇼츠 대본 - AI 활용법 3가지'
             }
@@ -382,30 +416,56 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
           />
         </label>
 
-        <label className="field">
+        <div className="field">
           링크 (선택)
-          <textarea
-            className="link-input"
-            value={linkUrl}
-            onChange={(e) => setLinkUrl(e.target.value)}
-            onInput={(e) => {
-              e.target.style.height = 'auto'
-              e.target.style.height = `${e.target.scrollHeight}px`
-            }}
-            rows={2}
-            placeholder="링크 (여러 개면 줄바꿈이나 공백으로 구분)"
-            inputMode="url"
-          />
-        </label>
+          {links.length > 0 && (
+            <ul className="link-list">
+              {links.map((u, i) => (
+                <li className="link-row" key={u}>
+                  <a href={u} target="_blank" rel="noopener noreferrer" title={u}>
+                    🔗 {shortenUrl(u)}
+                  </a>
+                  <button
+                    type="button"
+                    className="link-x"
+                    onClick={() => removeLink(u)}
+                    aria-label={`${i + 1}번째 링크 빼기`}
+                  >✕</button>
+                </li>
+              ))}
+            </ul>
+          )}
 
-        {links.length > 0 && (
-          <p className={`bulk-count ${links.length > 1 ? 'bulk-count-on' : ''}`}>
-            {links.length}개 링크 감지됨
-          </p>
-        )}
+          <div className="link-add">
+            <input
+              value={linkInput}
+              onChange={(e) => { setLinkInput(e.target.value); setError('') }}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitLinkInput() } }}
+              onBlur={() => commitLinkInput(true)}
+              placeholder="링크 붙여넣고 Enter · 여러 개를 한 번에 붙여넣어도 돼요"
+              inputMode="url"
+              aria-label="링크 추가"
+            />
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              onClick={() => commitLinkInput()}
+              disabled={!linkInput.trim()}
+            >추가</button>
+          </div>
+
+          {pendingLinks.length > 0 && (
+            <p className="field-note">
+              입력 중인 링크 {pendingLinks.length}개도 저장할 때 함께 담깁니다.
+            </p>
+          )}
+          {allLinks.length > 1 && (
+            <p className="bulk-count bulk-count-on">링크 {allLinks.length}개</p>
+          )}
+        </div>
 
         {/* 링크가 둘 이상일 때만 나눌지 묻는다. 수정 중에는 나눌 수 없다(이미 있는 한 항목이다). */}
-        {!isEdit && links.length > 1 && (
+        {!isEdit && allLinks.length > 1 && (
           <div className="field">
             저장 방식
             <div className="split-choice">
@@ -417,7 +477,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
                   onChange={() => setSplitMode(false)}
                   disabled={busy}
                 />
-                <span>한 항목에 모두 담기<small>링크 {links.length}개가 한 항목의 링크 목록으로</small></span>
+                <span>한 항목에 모두 담기<small>링크 {allLinks.length}개가 한 항목의 링크 목록으로</small></span>
               </label>
               <label className="split-opt">
                 <input
@@ -427,28 +487,15 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
                   onChange={() => setSplitMode(true)}
                   disabled={busy}
                 />
-                <span>링크마다 개별 항목 만들기<small>{links.length}개 항목 · 제목은 링크에서 자동으로</small></span>
+                <span>링크마다 개별 항목 만들기<small>{allLinks.length}개 항목 · 제목은 링크에서 자동으로</small></span>
               </label>
             </div>
             {splitting && images.length > 0 && (
               <p className="field-note">이미지와 내용은 첫 항목에만 첨부됩니다.</p>
             )}
             {splitting && (
-              <p className="field-note">카테고리·태그·실행 상태는 {links.length}개 모두에 함께 적용됩니다.</p>
+              <p className="field-note">카테고리·태그·실행 상태는 {allLinks.length}개 모두에 함께 적용됩니다.</p>
             )}
-          </div>
-        )}
-
-        {isEdit && savedLinks.length > 1 && (
-          <div className="field">
-            저장된 링크 {savedLinks.length}개
-            <ul className="link-list">
-              {savedLinks.map((u) => (
-                <li key={u}>
-                  <a href={u} target="_blank" rel="noopener noreferrer">🔗 {shortenUrl(u)}</a>
-                </li>
-              ))}
-            </ul>
           </div>
         )}
 
@@ -558,12 +605,11 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
             onChange={(e) => {
               const next = e.target.value
               setContent(next)
-              // 내용에서 찾은 URL 중 링크 칸에 아직 없는 것만 줄바꿈으로 덧붙인다
-              setLinkUrl((prev) => {
-                const have = new Set(extractUrls(prev))
+              // 내용에 붙여넣은 URL 중 목록에 아직 없는 것만 링크 목록에 더한다
+              setLinks((prev) => {
+                const have = new Set(prev)
                 const fresh = extractUrls(next).filter((u) => !have.has(u))
-                if (fresh.length === 0) return prev
-                return [...extractUrls(prev), ...fresh].join('\n')
+                return fresh.length === 0 ? prev : [...prev, ...fresh]
               })
             }}
             rows={8}
@@ -661,7 +707,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
                 ? `${progress.done}/${progress.total} 저장 중...`
                 : busy ? '저장 중...'
                   : uploading > 0 ? '이미지 올리는 중...'
-                    : splitting ? `${links.length}개 항목 저장`
+                    : splitting ? `${allLinks.length}개 항목 저장`
                       : '저장'}
             </button>
           </div>
