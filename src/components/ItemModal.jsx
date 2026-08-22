@@ -13,12 +13,14 @@ import {
 } from '../supabase.js'
 import { useEscapeKey, confirmDiscard, draftKeyFor, readDraft, writeDraft, clearDraft } from '../hooks.js'
 
-// youtu.be/abc123 형태로 줄인다
+// youtu.be/abc123 형태로 줄인다.
+// 물음표 뒤(?v=...)까지 남기는 이유: 유튜브 링크는 경로가 전부 /watch 라
+// 그것을 떼면 서로 다른 영상이 목록에서 똑같은 줄로 보인다.
 function shortenUrl(url) {
   try {
     const u = new URL(url)
     const path = u.pathname.replace(/\/$/, '')
-    const short = `${u.hostname.replace(/^www\./, '')}${path}`
+    const short = `${u.hostname.replace(/^www\./, '')}${path}${u.search}`
     return short.length > 42 ? `${short.slice(0, 42)}…` : short
   } catch {
     return url.length > 42 ? `${url.slice(0, 42)}…` : url
@@ -417,7 +419,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
         </label>
 
         <div className="field">
-          링크 (선택)
+          링크 <span className="field-hint">(여러 개를 한 번에 붙여넣어도 돼요)</span>
           {links.length > 0 && (
             <ul className="link-list">
               {links.map((u, i) => (
@@ -442,7 +444,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
               onChange={(e) => { setLinkInput(e.target.value); setError('') }}
               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitLinkInput() } }}
               onBlur={() => commitLinkInput(true)}
-              placeholder="링크 붙여넣고 Enter · 여러 개를 한 번에 붙여넣어도 돼요"
+              placeholder="링크 붙여넣고 Enter"
               inputMode="url"
               aria-label="링크 추가"
             />
