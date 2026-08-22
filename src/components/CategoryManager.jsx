@@ -1,7 +1,7 @@
 // 카테고리 목록 관리 모달. 이름·아이콘·색·상위 카테고리를 그 자리에서 고치고 바로 저장한다.
 import { useEffect, useState } from 'react'
 import { supabase, COLOR_KEYS, ICON_CHOICES, subtreeIds, treeOrder } from '../supabase.js'
-import { useEscapeKey } from '../hooks.js'
+import { useEscapeKey, confirmDiscard } from '../hooks.js'
 
 export default function CategoryManager({ categories, userId, onClose, onChanged }) {
   const [rows, setRows] = useState(categories)
@@ -12,7 +12,12 @@ export default function CategoryManager({ categories, userId, onClose, onChanged
 
   useEffect(() => { setRows(categories) }, [categories])
 
-  useEscapeKey(handleClose)
+  // Esc: 아이콘 고르개가 열려 있으면 그것부터 닫는다. 새 이름을 쓰던 중이면 한 번 물어본다.
+  useEscapeKey(() => {
+    if (iconOpen) { setIconOpen(null); return }
+    if (!confirmDiscard(newName.trim().length > 0, '입력 중인 카테고리 이름이 있습니다. 닫을까요?')) return
+    handleClose()
+  })
 
   function handleClose() {
     onChanged()
@@ -102,7 +107,8 @@ export default function CategoryManager({ categories, userId, onClose, onChanged
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) handleClose() }}>
+    // 배경을 눌러도 닫지 않는다 (모달 공통 규칙). 닫는 길은 ✕ · Esc 뿐이다.
+    <div className="modal-backdrop">
       <div className="modal" role="dialog" aria-modal="true" aria-label="카테고리 관리">
         <div className="modal-head">
           <h2>카테고리 관리</h2>

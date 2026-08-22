@@ -1,7 +1,7 @@
 // '오늘' 탭에서 할 일을 묶는 시간대(아침/저녁 등) 관리 모달. 순서는 position 값을 이웃과 맞바꿔 바꾼다.
 import { useEffect, useState } from 'react'
 import { supabase, ICON_CHOICES } from '../supabase.js'
-import { useEscapeKey } from '../hooks.js'
+import { useEscapeKey, confirmDiscard } from '../hooks.js'
 
 export default function SlotManager({ slots, userId, onClose, onChanged }) {
   const [rows, setRows] = useState(slots)
@@ -12,7 +12,12 @@ export default function SlotManager({ slots, userId, onClose, onChanged }) {
 
   useEffect(() => { setRows(slots) }, [slots])
 
-  useEscapeKey(handleClose)
+  // Esc: 아이콘 고르개가 열려 있으면 그것부터 닫는다. 새 이름을 쓰던 중이면 한 번 물어본다.
+  useEscapeKey(() => {
+    if (iconOpen) { setIconOpen(null); return }
+    if (!confirmDiscard(newName.trim().length > 0, '입력 중인 시간대 이름이 있습니다. 닫을까요?')) return
+    handleClose()
+  })
 
   function handleClose() {
     onChanged()
@@ -91,7 +96,8 @@ export default function SlotManager({ slots, userId, onClose, onChanged }) {
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) handleClose() }}>
+    // 배경을 눌러도 닫지 않는다 (모달 공통 규칙). 닫는 길은 ✕ · Esc 뿐이다.
+    <div className="modal-backdrop">
       <div className="modal" role="dialog" aria-modal="true" aria-label="시간대 관리">
         <div className="modal-head">
           <h2>시간대 관리</h2>

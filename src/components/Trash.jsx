@@ -67,7 +67,8 @@ export default function Trash({ onClose, onChanged }) {
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) handleClose() }}>
+    // 배경을 눌러도 닫지 않는다 (모달 공통 규칙). 닫는 길은 ✕ · Esc 뿐이다.
+    <div className="modal-backdrop">
       <div className="modal" role="dialog" aria-modal="true" aria-label="휴지통">
         <div className="modal-head">
           <h2>🗑 휴지통</h2>

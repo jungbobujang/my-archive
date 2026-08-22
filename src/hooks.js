@@ -66,3 +66,10 @@ export function useEscapeKey(handler, enabled = true) {
     return () => window.removeEventListener('keydown', onKey)
   }, [enabled])
 }
+
+// 닫기 전에 한 번 물어본다. 쓰던 게 없으면 묻지 않는다.
+// 배경 클릭·포커스 이동으로는 어떤 모달도 닫히지 않으므로, 이 확인은 Esc 에만 붙는다
+// (✕ · 취소는 눌러야 닿는 자리라 그냥 닫는다).
+export function confirmDiscard(dirty, message = '작성 중인 내용이 있습니다. 닫을까요?') {
+  return !dirty || window.confirm(message)
+}

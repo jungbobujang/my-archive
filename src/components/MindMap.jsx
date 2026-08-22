@@ -167,12 +167,13 @@ export default function MindMap({ categories, counts, onSelect, onAdd }) {
           />
         ))}
 
-        {/* 입력 중 바깥을 누르면 취소 */}
+        {/* 바깥을 눌러도 쓰던 이름은 버리지 않는다 — 빈 칸일 때만 닫는다.
+            (모달과 같은 규칙: 내용이 있으면 Esc 나 Enter 로만 끝낸다) */}
         {addingFor !== CLOSED && (
           <rect
             className="mm-backdrop"
             x={0} y={0} width={W} height={H}
-            onMouseDown={closeAdd}
+            onMouseDown={() => { if (!draft.trim()) closeAdd() }}
           />
         )}
 

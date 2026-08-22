@@ -7,7 +7,8 @@ export default function Settings({ email, themePref, onThemeChange, onOpenPricin
   useEscapeKey(onClose)
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+    // 배경을 눌러도 닫지 않는다. 닫는 길은 ✕ · Esc 뿐이다 (모달 공통 규칙).
+    <div className="modal-backdrop">
       <div className="modal" role="dialog" aria-modal="true" aria-label="설정">
         <div className="modal-head">
           <h2>설정</h2>
