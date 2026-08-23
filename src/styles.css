@@ -1487,6 +1487,27 @@ a.card-thumb { cursor: pointer; }
 .set-value { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
 .set-hint { margin: 8px 0 0; font-size: 12.5px; color: var(--ink-faint); line-height: 1.5; }
 
+/* 저장소 사용량 막대. 80% 를 넘으면 주황으로 바뀐다. */
+.gauge {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+.gauge-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width .3s ease;
+}
+.gauge-warn { background: var(--c-amber-mid); }
+.gauge-note { color: var(--c-amber-fg); font-weight: 700; }
+@media (prefers-reduced-motion: reduce) {
+  .gauge-fill { transition: none; }
+}
+
 /* ---------- 요금제 ---------- */
 .pricing-head { text-align: center; padding: 8px 0 22px; }
 .pricing-tag {
