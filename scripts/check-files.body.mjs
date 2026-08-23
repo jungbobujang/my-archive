@@ -29,6 +29,7 @@ const { createRoot } = await import('react-dom/client')
 const act = React.act ?? (await import('react-dom/test-utils')).act
 const ItemModal = (await import('../src/components/ItemModal.jsx')).default
 const Trash = (await import('../src/components/Trash.jsx')).default
+const Settings = (await import('../src/components/Settings.jsx')).default
 
 let confirmAnswer = true
 window.confirm = () => confirmAnswer
@@ -321,7 +322,44 @@ const imagesBucket = () => store.buckets['archive-images']
   act(() => { root.unmount() })
 }
 
-// ── 14. 공개 URL ↔ 스토리지 경로 ────────────────────────────
+// ── 14. 저장소 사용량 게이지 ────────────────────────────────
+{
+  const GB = 1024 * 1024 * 1024
+  const settings = (onClose) => React.createElement(Settings, {
+    email: 'a@b.c', themePref: 'system', onThemeChange: () => {}, onOpenPricing: () => {}, onClose
+  })
+
+  // ① 조금 썼을 때
+  resetStore()
+  store.rows.items.push({ id: 'i1', files: [{ path: 'a/1_가.pdf', name: '가.pdf', size: 12.3 * 1024 * 1024 }] })
+  let m = mount(settings(() => {}))
+  await act(async () => {})
+  check('게이지: 쓴 용량을 보여 준다', q(m.host, '.set-value')?.textContent.includes('파일 12.3MB / 1GB'),
+    q(m.host, '.set-value')?.textContent)
+  check('게이지: 80% 아래는 주황이 아니다', !q(m.host, '.gauge-fill')?.classList.contains('gauge-warn'))
+  act(() => { m.root.unmount() })
+
+  // ② 80% 를 넘었을 때
+  resetStore()
+  store.rows.items.push({ id: 'i1', files: [{ path: 'a/1_큰.zip', name: '큰.zip', size: Math.round(GB * 0.85) }] })
+  m = mount(settings(() => {}))
+  await act(async () => {})
+  check('게이지: 80% 넘으면 주황', q(m.host, '.gauge-fill')?.classList.contains('gauge-warn'))
+  check('게이지: 넘었다고 적는다', m.host.textContent.includes('80% 를 넘었어요'))
+  act(() => { m.root.unmount() })
+
+  // ③ files 열이 없는 DB 면 게이지를 숨긴다 (0MB 로 보이면 '아직 안 썼다' 로 읽힌다)
+  resetStore()
+  store.missingFilesColumn = true
+  m = mount(settings(() => {}))
+  await act(async () => {})
+  check('게이지: files 열이 없으면 숨는다', q(m.host, '.gauge') === null)
+  check('게이지: 그래도 나머지 설정은 그대로 뜬다', m.host.textContent.includes('화면 테마'))
+  act(() => { m.root.unmount() })
+  resetStore()
+}
+
+// ── 15. 공개 URL ↔ 스토리지 경로 ────────────────────────────
 {
   check('우리 이미지 URL 에서 경로를 되찾는다',
     imagePathFromUrl('https://x.co/storage/v1/object/public/archive-images/u1/1-ab.png') === 'u1/1-ab.png')

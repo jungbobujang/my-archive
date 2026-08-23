@@ -126,6 +126,11 @@ function run(table, q) {
     return { data: null, error: null }
   }
 
+  // select 도 막는다. 실제 PostgREST 도 없는 열을 고르면 오류를 준다 —
+  // 설정 화면의 사용량 게이지가 그 경우에 숨는지 보려면 여기서도 실패해야 한다.
+  if (table === 'items' && store.missingFilesColumn) {
+    return { data: null, error: MISSING_FILES }
+  }
   const found = rows.filter((r) => matches(r, q._filters))
   return { data: q._single ? (found[0] ?? null) : found, error: null }
 }

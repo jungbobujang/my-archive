@@ -14,6 +14,15 @@ const categories = [
 ]
 const slots = [{ id: 's1', name: '아침', icon: '🌅', position: 0 }]
 
+// 첨부 파일이 붙은 항목. 이름을 일부러 길게 두었다 —
+// 375px 에서 이름이 용량·✕ 를 밀어내는지가 이 화면으로 재려는 것이다.
+const attachedFiles = [
+  { path: 'it1/1700000000001_2026학년도 3학년 과학과 교육과정 운영 계획서(최종본).hwp',
+    name: '2026학년도 3학년 과학과 교육과정 운영 계획서(최종본).hwp', size: 2411724 },
+  { path: 'it1/1700000000002_학생 명단.xlsx', name: '학생 명단.xlsx', size: 18432 },
+  { path: 'it1/1700000000003_실험 안전 수칙.pdf', name: '실험 안전 수칙.pdf', size: 940 }
+]
+
 const item = (mode === 'new' || mode === 'multi') ? null : {
   id: 'it1',
   title: '쇼츠 대본 - AI 활용법 3가지',
@@ -28,7 +37,8 @@ const item = (mode === 'new' || mode === 'multi') ? null : {
   status: 'none',
   due_date: null,
   slot_id: null,
-  category_id: 'c1'
+  category_id: 'c1',
+  files: mode === 'files' ? attachedFiles : []
 }
 
 if (mode === 'multi') {
