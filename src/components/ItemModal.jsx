@@ -194,9 +194,13 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   // 크게 보기가 떠 있으면 Esc 는 그것부터 닫는다 (모달까지 같이 닫히면 쓴 내용이 날아간다)
   useEscapeKey(() => { if (zoom) setZoom(null); else closeFromEscape() })
 
-  // 되살린 초안을 버리고 처음 상태로 되돌린다
+  // 되살린 초안을 버리고 처음 상태로 되돌린다.
+  // 되돌리면 이번에 올린 이미지·파일은 화면에서 사라지므로 스토리지에서도 지운다 —
+  // 안 지우면 아무 항목도 가리키지 않는 채로 남고, 화면에 없으니 찾을 방법도 없다.
   function discardDraft() {
     clearDraft(draftKey)
+    removeStorageImages(images.filter((u) => !savedImages.includes(u)))
+    removeStorageFiles(files.filter((f) => !savedFilePaths.has(f.path)).map((f) => f.path))
     setTitle(item?.title ?? '')
     setContent(item?.content ?? '')
     setLinks(extractUrls(item?.link_url ?? ''))

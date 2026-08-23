@@ -229,6 +229,29 @@ const imagesBucket = () => store.buckets['archive-images']
   act(() => { root.unmount() })
 }
 
+// ── 9-b. '새로 쓰기' 로 초안을 버려도 고아가 남지 않는다 ────
+{
+  resetStore()
+  window.sessionStorage.clear()
+  // 되살릴 초안을 미리 심어 둔다(새로고침 흉내). 그래야 '새로 쓰기' 버튼이 뜬다.
+  window.sessionStorage.setItem('ma:draft:new', JSON.stringify({
+    title: '쓰던 제목', content: '', links: [], linkInput: '', tagsText: '',
+    categoryIds: [], status: 'none', dueDate: '', slotId: null, images: [], splitMode: false
+  }))
+  const { host, root } = mount(React.createElement(ItemModal, {
+    item: null, categories: [], slots: [], userId: 'u1',
+    onClose: () => {}, onSaved: () => {}
+  }))
+  check('되살렸다는 안내가 뜬다', host.textContent.includes('작성 중이던 내용을 되살렸어요'))
+  await attach(host, [realFile('가.pdf', 10), realFile('나.png', 10, 'image/png')])
+  check('준비: 파일 1 · 이미지 1', filesBucket().size === 1 && imagesBucket().size === 1)
+  await act(async () => { click(q(host, '.draft-note button')) }) // 새로 쓰기
+  check('새로 쓰기: 파일 고아 0', filesBucket().size === 0, [...filesBucket().keys()].join())
+  check('새로 쓰기: 이미지 고아 0', imagesBucket().size === 0, [...imagesBucket().keys()].join())
+  check('새로 쓰기: 화면에서도 비었다', qa(host, '.file-row').length === 0)
+  act(() => { root.unmount() })
+}
+
 // ── 10. 이미 붙어 있던 파일은 취소하면 지워지지 않는다 ──────
 {
   resetStore()
