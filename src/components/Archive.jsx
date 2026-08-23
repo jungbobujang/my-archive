@@ -804,7 +804,13 @@ export default function Archive({ session, onNavigate }) {
           slots={slots}
           userId={session.user.id}
           onClose={() => setModalItem(undefined)}
-          onSaved={() => { setModalItem(undefined); refresh() }}
+          onSaved={(warn) => {
+            setModalItem(undefined)
+            refresh()
+            // 모달이 닫히므로 인라인 문구로는 전할 수 없는 것만 토스트로 올라온다
+            // (지금은 items.files 열이 없어 첨부를 못 붙인 경우뿐이다)
+            if (warn) toast.error(warn)
+          }}
         />
       )}
 

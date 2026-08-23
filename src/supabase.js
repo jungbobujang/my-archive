@@ -294,7 +294,9 @@ export function splitByKind(files) {
   return { images, docs }
 }
 
-// 붙여넣기·드롭에서 이미지 파일만 골라낸다
+// 붙여넣기·드롭에서 이미지 파일만 골라낸다.
+// 모달의 드롭은 이미지와 파일을 함께 받아 splitByKind 로 가르므로 이것을 쓰지 않는다.
+// 목록 화면의 '빠른 저장'(Archive)은 이미지만 받으므로 그대로 쓴다.
 export function imageFilesFromPaste(e) {
   const items = e.clipboardData?.items ?? []
   const files = []

@@ -8,7 +8,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   supabase, extractUrls, parseLinks, parseTags, youtubeThumb, ymd, fetchLinkTitle,
-  parseImages, joinImages, uploadImage, imageFilesFromPaste, imageFilesFromDrop, MAX_IMAGES,
+  parseImages, joinImages, uploadImage, imageFilesFromPaste, MAX_IMAGES,
+  parseFiles, joinFiles, uploadFile, signedFileUrl, fileRejectReason, fileIcon, formatBytes,
+  removeStorageFiles, removeStorageImages, splitByKind, MAX_FILES, FILE_EXTS,
   treeOrder, categoryPath
 } from '../supabase.js'
 import { useEscapeKey, confirmDiscard, draftKeyFor, readDraft, writeDraft, clearDraft } from '../hooks.js'
@@ -26,6 +28,16 @@ function shortenUrl(url) {
     return url.length > 42 ? `${url.slice(0, 42)}…` : url
   }
 }
+
+// setup.sql 을 아직 실행하지 않아 items.files 열이 없는 DB 인지.
+// PostgREST 는 스키마 캐시에서 못 찾으면 PGRST204, 실제 SQL 오류면 42703 을 준다.
+function isMissingFilesColumn(err) {
+  const code = err?.code ?? ''
+  if (code === 'PGRST204' || code === '42703') return /files/i.test(err?.message ?? '')
+  return false
+}
+
+const FILE_ACCEPT = FILE_EXTS.map((e) => `.${e}`).join(',')
 
 export default function ItemModal({ item, categories, slots, userId, onClose, onSaved }) {
   const isEdit = !!item
@@ -63,6 +75,30 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   const [busy, setBusy] = useState(false)
   const fileRef = useRef(null)
 
+  // 첨부 파일. 초안에는 넣지 않는다 — 저장하지 않고 닫으면 스토리지에서 지우므로,
+  // 초안에 남겨 두면 다시 열었을 때 이미 없는 파일을 가리키게 된다.
+  const [files, setFiles] = useState(() => parseFiles(item?.files))
+  const [fileBusy, setFileBusy] = useState(0)    // 올리는 중인 개수
+  const [fileDrag, setFileDrag] = useState(false)
+  const attachRef = useRef(null)
+
+  // 저장 키의 앞자리. 수정 중이면 항목 id 를, 새 항목이면 아직 id 가 없으므로
+  // 이 모달에서만 쓰는 임시 id 를 쓴다. 지우기는 경로 목록으로 하지 폴더로 하지 않아
+  // 나중에 항목 id 와 달라도 상관없다.
+  const [folderId] = useState(() => (
+    item?.id ?? `new-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
+  ))
+
+  // DB 에 이미 붙어 있는 것들. '이번에 올린 것' 과 가르는 기준선이다.
+  const savedImages = useMemo(() => parseImages(item?.image_url), [item?.image_url])
+  const savedFilePaths = useMemo(
+    () => new Set(parseFiles(item?.files).map((f) => f.path)), [item?.files]
+  )
+  // ✕ 로 뺐지만 DB 에는 아직 남아 있는 것들. 저장이 성공한 뒤에 지운다 —
+  // 취소하고 닫으면 항목에는 그대로 붙어 있어야 하므로 그 자리에서 지우면 안 된다.
+  const pendingRemoval = useRef({ images: [], files: [] })
+  const [needsSql, setNeedsSql] = useState(false)
+
   // 링크마다 개별 항목으로 나눌지 (링크가 2개 이상일 때만 고를 수 있다)
   const [splitMode, setSplitMode] = useState(draft?.splitMode ?? false)
 
@@ -84,38 +120,73 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   )
   const splitting = !isEdit && splitMode && allLinks.length > 1
 
-  // 제목·링크·내용·이미지 중 하나라도 있으면 저장할 수 있다. 제목은 이제 필수가 아니다.
+  // 제목·링크·내용·이미지·파일 중 하나라도 있으면 저장할 수 있다. 제목은 이제 필수가 아니다.
   const hasAnything =
-    title.trim().length > 0 || allLinks.length > 0 || content.trim().length > 0 || images.length > 0
+    title.trim().length > 0 || allLinks.length > 0 || content.trim().length > 0 ||
+    images.length > 0 || files.length > 0
 
   // 열었을 때와 견줘 하나라도 달라졌는지. '내용이 있는지' 가 아니라 '바뀌었는지' 로 잰다 —
   // 수정 모달은 열자마자 내용이 차 있으므로, 내용 유무로 재면 Esc 마다 확인창이 뜬다.
   const sameSet = (a, b) => a.length === b.length && [...a].sort().join() === [...b].sort().join()
-  const dirty =
-    title !== (item?.title ?? '') ||
-    content !== (item?.content ?? '') ||
-    links.join(' ') !== extractUrls(item?.link_url ?? '').join(' ') ||
-    linkInput.trim() !== '' ||
-    tagsText !== (item?.tags ?? []).join(', ') ||
-    status !== (item?.status ?? 'none') ||
-    dueDate !== (item?.due_date ?? '') ||
-    slotId !== (item?.slot_id ?? null) ||
-    joinImages(images) !== joinImages(parseImages(item?.image_url)) ||
-    !sameSet(categoryIds, baseCategoryIds)
+  // 이미지 목록을 인자로 받는다 — 닫을 때 '이번에 올린 것을 뺀 상태' 로도 재야 하기 때문이다.
+  function dirtyWith(imgs) {
+    return (
+      title !== (item?.title ?? '') ||
+      content !== (item?.content ?? '') ||
+      links.join(' ') !== extractUrls(item?.link_url ?? '').join(' ') ||
+      linkInput.trim() !== '' ||
+      tagsText !== (item?.tags ?? []).join(', ') ||
+      status !== (item?.status ?? 'none') ||
+      dueDate !== (item?.due_date ?? '') ||
+      slotId !== (item?.slot_id ?? null) ||
+      joinImages(imgs) !== joinImages(savedImages) ||
+      !sameSet(categoryIds, baseCategoryIds)
+    )
+  }
+  const filesDirty =
+    files.map((f) => f.path).join('\n') !== parseFiles(item?.files).map((f) => f.path).join('\n')
+  const dirty = dirtyWith(images) || filesDirty
+
+  // 초안에 담을 값. 파일은 넣지 않는다(위 files 선언의 주석 참고).
+  function draftBody(imgs) {
+    return {
+      title, content, links, linkInput, tagsText, categoryIds, status, dueDate, slotId,
+      images: imgs, splitMode
+    }
+  }
 
   // 작성 중인 값을 sessionStorage 에 남긴다. 바뀐 게 없으면 남길 것도 없다.
   useEffect(() => {
     if (!dirty) { clearDraft(draftKey); return }
-    writeDraft(draftKey, {
-      title, content, links, linkInput, tagsText, categoryIds, status, dueDate, slotId, images, splitMode
-    })
+    writeDraft(draftKey, draftBody(images))
   }, [draftKey, dirty, title, content, links, linkInput, tagsText, categoryIds, status, dueDate, slotId, images, splitMode])
 
+  // 저장하지 않고 닫을 때: 이번에 올려 둔 이미지·파일을 스토리지에서 지운다.
+  //
+  // ac74304 는 올린 이미지를 초안에 남겨 두는 쪽을 골랐고, 그 대가로 저장하지 않고
+  // 닫으면 스토리지에 고아가 남았다(커밋 본문에 적혀 있다). 이제는 닫는 순간 지운다.
+  // 그래서 초안에서도 함께 빼야 한다 — 안 그러면 다시 열었을 때 이미 없는 그림을 가리킨다.
+  // 글·링크·카테고리 같은 나머지 초안은 그대로 남는다.
+  function cleanupAndClose() {
+    const keptImages = images.filter((u) => savedImages.includes(u))
+    const goneImages = images.filter((u) => !savedImages.includes(u))
+    const goneFiles = files.filter((f) => !savedFilePaths.has(f.path)).map((f) => f.path)
+
+    if (goneImages.length > 0) removeStorageImages(goneImages)
+    if (goneFiles.length > 0) removeStorageFiles(goneFiles)
+
+    // 초안을 마지막으로 한 번 더 쓴다. 이 뒤로는 언마운트라 위 useEffect 가 다시 돌지 않는다.
+    if (dirtyWith(keptImages)) writeDraft(draftKey, draftBody(keptImages))
+    else clearDraft(draftKey)
+
+    onClose()
+  }
+
   // Esc 는 손이 미끄러지기 쉬운 자리라, 쓰던 게 있으면 한 번 물어본다.
-  // ✕·취소는 눌러야 닿는 자리라 그냥 닫는다 (어차피 초안은 남는다).
+  // ✕·취소는 눌러야 닿는 자리라 그냥 닫는다 (어차피 글·링크 초안은 남는다).
   function closeFromEscape() {
     if (!confirmDiscard(dirty)) return
-    onClose()
+    cleanupAndClose()
   }
 
   // 크게 보기가 떠 있으면 Esc 는 그것부터 닫는다 (모달까지 같이 닫히면 쓴 내용이 날아간다)
@@ -134,6 +205,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     setDueDate(item?.due_date ?? '')
     setSlotId(item?.slot_id ?? null)
     setImages(parseImages(item?.image_url))
+    setFiles(parseFiles(item?.files))
     setSplitMode(false)
     setRestored(false)
     setError('')
@@ -175,9 +247,9 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     setLinks((prev) => prev.filter((u) => u !== url))
   }
 
-  // 파일 여러 개를 받아 순서대로 올린다. 하나가 실패해도 나머지는 계속 간다.
-  async function addFiles(files) {
-    const list = [...files].filter((f) => f.type.startsWith('image/'))
+  // 이미지 여러 장을 받아 순서대로 올린다. 하나가 실패해도 나머지는 계속 간다.
+  async function addFiles(incoming) {
+    const list = [...incoming]
     if (list.length === 0) return
 
     const room = MAX_IMAGES - images.length
@@ -210,26 +282,103 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     if (failed > 0) setError(`이미지 ${failed}장을 올리지 못했어요. 연결 상태를 확인해 주세요.`)
   }
 
+  // 파일 여러 개를 받아 순서대로 올린다. 거부 사유는 첫 건만 보여 준다 —
+  // 한 번에 여러 개를 떨어뜨렸을 때 사유를 다 늘어놓으면 무엇을 고쳐야 하는지 흐려진다.
+  async function addAttachments(incoming) {
+    const list = [...incoming]
+    if (list.length === 0) return
+
+    const take = []
+    let reason = ''
+    for (const f of list) {
+      // 개수 상한은 '지금 담긴 것 + 이번에 담기로 한 것' 으로 센다
+      const why = fileRejectReason(f, files.length + take.length)
+      if (why) { if (!reason) reason = why; continue }
+      take.push(f)
+    }
+    setError(reason)
+    if (take.length === 0) return
+
+    setFileBusy((n) => n + take.length)
+    let failed = 0
+    for (const f of take) {
+      try {
+        const meta = await uploadFile(f, folderId)
+        setFiles((prev) => (
+          prev.length >= MAX_FILES || prev.some((x) => x.path === meta.path) ? prev : [...prev, meta]
+        ))
+      } catch (err) {
+        failed += 1
+        console.error('파일 업로드 실패:', err)
+      } finally {
+        setFileBusy((n) => Math.max(0, n - 1))
+      }
+    }
+    if (failed > 0) setError(`파일 ${failed}개를 올리지 못했어요. 연결 상태를 확인해 주세요.`)
+  }
+
+  // 떨어뜨린 것을 이미지와 파일로 갈라 각자에게 보낸다. 어느 칸에 떨어뜨렸든 같다 —
+  // 스크린샷을 파일 칸에 놓았다고 "이미지는 안 됩니다" 라고 답하는 것은 도움이 되지 않는다.
+  function routeFiles(list) {
+    const { images: imgs, docs } = splitByKind(list)
+    if (imgs.length > 0) addFiles(imgs)
+    if (docs.length > 0) addAttachments(docs)
+  }
+
+  // 이미지 빼기. 이번에 올린 것이면 바로 지우고(아직 어디에도 붙지 않았다),
+  // 이미 항목에 붙어 있던 것이면 저장이 성공한 뒤에 지운다.
+  function removeImage(url) {
+    setImages((prev) => prev.filter((u) => u !== url))
+    if (savedImages.includes(url)) pendingRemoval.current.images.push(url)
+    else removeStorageImages([url])
+  }
+
+  function removeFile(f) {
+    setFiles((prev) => prev.filter((x) => x.path !== f.path))
+    if (savedFilePaths.has(f.path)) pendingRemoval.current.files.push(f.path)
+    else removeStorageFiles([f.path])
+  }
+
+  // 비공개 버킷이라 누를 때마다 짧은 서명 주소를 받아 내려받는다.
+  async function downloadFile(f) {
+    try {
+      const url = await signedFileUrl(f.path, f.name)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = f.name
+      a.rel = 'noopener'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    } catch (err) {
+      console.error('파일 내려받기 실패:', err)
+      setError('파일을 내려받지 못했어요. 잠시 뒤 다시 시도해 주세요.')
+    }
+  }
+
   function handlePaste(e) {
-    const files = imageFilesFromPaste(e)
-    if (files.length === 0) return // 이미지가 아니면 평소대로 텍스트 붙여넣기
+    const pasted = imageFilesFromPaste(e)
+    if (pasted.length === 0) return // 이미지가 아니면 평소대로 텍스트 붙여넣기
     e.preventDefault()
-    addFiles(files)
+    addFiles(pasted)
   }
 
   function handleDrop(e) {
-    const files = imageFilesFromDrop(e)
+    const dropped = [...(e.dataTransfer?.files ?? [])]
     setDragOver(false)
-    if (files.length === 0) return
+    setFileDrag(false)
+    if (dropped.length === 0) return
     e.preventDefault()
-    addFiles(files)
+    routeFiles(dropped)
   }
 
   // 제목이 비었을 때 대신 지어 준다.
   //   ① 링크가 있으면 첫 링크의 제목 (noembed)
   //   ② 내용이 있으면 앞 20자
-  //   ③ 이미지만 있으면 '이미지 YYYY-MM-DD'
-  // ②를 ③보다 앞에 둔 이유: 글과 이미지가 함께 있을 때 날짜보다 글 첫머리가 훨씬 잘 읽힌다.
+  //   ③ 파일이 있으면 첫 파일의 이름
+  //   ④ 이미지만 있으면 '이미지 YYYY-MM-DD'
+  // ②를 아래보다 앞에 둔 이유: 글과 함께 있을 때 글 첫머리가 훨씬 잘 읽힌다.
+  // ③을 ④보다 앞에 둔 이유: 파일은 이미지와 달리 이름이 있고, 이름이 날짜보다 낫다.
   async function makeTitle(firstLink) {
     if (firstLink) {
       const fetched = await fetchLinkTitle(firstLink)
@@ -237,14 +386,28 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     }
     const body = content.trim()
     if (body) return body.slice(0, 20)
+    if (files.length > 0) return files[0].name
     if (images.length > 0) return `이미지 ${ymd(new Date())}`
     return firstLink || `메모 ${ymd(new Date())}`
   }
 
+  // setup.sql 을 아직 실행하지 않은 DB 에서도 나머지 저장은 되게 한다.
+  // files 열이 없다는 오류일 때만 그 열을 빼고 한 번 더 보낸다 — 첨부만 못 붙을 뿐,
+  // 쓰던 글이 통째로 날아가지는 않는다. 사람에게는 저장이 끝난 뒤 토스트로 알린다.
+  async function runWithFilesFallback(run, payload) {
+    const first = await run(payload)
+    if (!first.error || !isMissingFilesColumn(first.error)) return first
+    setNeedsSql(true)
+    const { files: _omit, ...rest } = payload
+    return run(rest)
+  }
+
   // 한 건 저장 + 소속 연결. 여러 건을 만들 때도 이 함수를 돌려 쓴다.
   async function insertOne(payload) {
-    const { data: saved, error: dbErr } = await supabase
-      .from('items').insert(payload).select().single()
+    const { data: saved, error: dbErr } = await runWithFilesFallback(
+      (p) => supabase.from('items').insert(p).select().single(),
+      payload
+    )
     if (dbErr) throw dbErr
     await linkCategories(saved.id)
     return saved
@@ -274,13 +437,33 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     }
   }
 
+  // ✕ 로 뺐던 '이미 붙어 있던' 첨부를 저장이 끝난 뒤에 지운다.
+  // 저장이 실패했거나 취소했다면 여기에 오지 않으므로 항목에는 그대로 남는다.
+  async function flushPendingRemoval() {
+    const { images: imgs, files: fps } = pendingRemoval.current
+    pendingRemoval.current = { images: [], files: [] }
+    if (imgs.length > 0) await removeStorageImages(imgs)
+    if (fps.length > 0) await removeStorageFiles(fps)
+  }
+
+  // files 열이 없어 첨부를 못 붙였다면 그 사실을 밖으로 알린다(모달은 닫히므로 토스트로).
+  function sqlHint() {
+    return needsSql && files.length > 0
+      ? '첨부 파일은 붙이지 못했어요 — supabase/setup.sql 을 실행해 주세요'
+      : null
+  }
+
   async function handleSave() {
     if (uploading > 0) {
       setError('이미지를 올리는 중이에요. 끝나면 저장해 주세요.')
       return
     }
+    if (fileBusy > 0) {
+      setError('파일을 올리는 중이에요. 끝나면 저장해 주세요.')
+      return
+    }
     if (!hasAnything) {
-      setError('제목·링크·내용·이미지 중 하나는 있어야 해요')
+      setError('제목·링크·내용·이미지·파일 중 하나는 있어야 해요')
       return
     }
     setBusy(true)
@@ -302,7 +485,8 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
               // 이미지와 내용은 첫 항목에만 (N개에 같은 것을 복사하면 잡음이 된다)
               content: i === 0 ? content : '',
               link_url: url,
-              image_url: i === 0 && images.length > 0 ? joinImages(images) : youtubeThumb(url)
+              image_url: i === 0 && images.length > 0 ? joinImages(images) : youtubeThumb(url),
+              files: i === 0 ? joinFiles(files) : []
             })
             made += 1
           } catch (err) {
@@ -315,8 +499,9 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
           setError(`${made}개 저장 (${finalLinks.length - made}개 실패)`)
         }
         clearDraft(draftKey)
+        await flushPendingRemoval()
 
-        onSaved()
+        onSaved(sqlHint())
         return
       }
 
@@ -336,12 +521,15 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
         title: finalTitle,
         content,
         link_url: cleanLink,
-        image_url: joinImages(finalImages)
+        image_url: joinImages(finalImages),
+        files: joinFiles(files)
       }
 
       if (isEdit) {
-        const { data: saved, error: dbErr } = await supabase
-          .from('items').update(payload).eq('id', item.id).select().single()
+        const { data: saved, error: dbErr } = await runWithFilesFallback(
+          (p) => supabase.from('items').update(p).eq('id', item.id).select().single(),
+          payload
+        )
         if (dbErr) throw dbErr
         await linkCategories(saved.id)
       } else {
@@ -349,9 +537,9 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
       }
 
       clearDraft(draftKey)
+      await flushPendingRemoval()
 
-
-      onSaved()
+      onSaved(sqlHint())
     } catch (err) {
       setError('저장에 실패했어요. 네트워크와 Supabase 설정을 확인해 주세요.')
       console.error(err)
@@ -361,6 +549,8 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     }
   }
 
+  // 휴지통으로 보내기(soft delete). 항목에 이미 붙어 있던 첨부는 복원할 수 있어야 하므로
+  // 건드리지 않고, 이번에 올렸지만 아직 붙지 않은 것만 지운다.
   async function handleDelete() {
     if (!window.confirm('휴지통으로 이동할까요? 언제든 복원할 수 있어요')) return
     setBusy(true)
@@ -374,6 +564,8 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
       return
     }
     clearDraft(draftKey)
+    await removeStorageImages(images.filter((u) => !savedImages.includes(u)))
+    await removeStorageFiles(files.filter((f) => !savedFilePaths.has(f.path)).map((f) => f.path))
 
     onSaved()
   }
@@ -392,7 +584,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
       >
         <div className="modal-head">
           <h2>{isEdit ? '항목 수정' : '새 항목'}</h2>
-          <button className="btn-ghost btn-sm" onClick={onClose} aria-label="닫기">✕</button>
+          <button className="btn-ghost btn-sm" onClick={cleanupAndClose} aria-label="닫기">✕</button>
         </div>
 
         {restored && (
@@ -652,7 +844,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
                     <button
                       type="button"
                       className="img-thumb-x"
-                      onClick={() => setImages((prev) => prev.filter((u) => u !== url))}
+                      onClick={() => removeImage(url)}
                       aria-label={`${i + 1}번째 이미지 제거`}
                     >✕</button>
                     {i === 0 && <span className="img-thumb-tag">대표</span>}
@@ -679,7 +871,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
                 multiple
                 className="img-file"
                 onChange={(e) => {
-                  addFiles(e.target.files ?? [])
+                  routeFiles(e.target.files ?? [])
                   e.target.value = '' // 같은 파일을 다시 골라도 변화가 잡히게
                 }}
                 disabled={images.length >= MAX_IMAGES}
@@ -692,6 +884,70 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
           </div>
         </div>
 
+        <div className="field">
+          파일 {files.length > 0 && `(${files.length}/${MAX_FILES})`}
+
+          <div
+            className={`file-drop ${fileDrag ? 'file-drop-on' : ''}`}
+            onDragOver={(e) => { e.preventDefault(); setFileDrag(true) }}
+            onDragLeave={() => setFileDrag(false)}
+            onDrop={handleDrop}
+          >
+            {files.length > 0 && (
+              <ul className="file-list">
+                {files.map((f) => (
+                  <li className="file-row" key={f.path}>
+                    <button
+                      type="button"
+                      className="file-open"
+                      onClick={() => downloadFile(f)}
+                      title={`${f.name} 내려받기`}
+                    >
+                      <span className="file-icon" aria-hidden="true">{fileIcon(f.name)}</span>
+                      <span className="file-name">{f.name}</span>
+                      <span className="file-size">{formatBytes(f.size)}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="link-x"
+                      onClick={() => removeFile(f)}
+                      aria-label={`${f.name} 빼기`}
+                    >✕</button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {fileBusy > 0 && (
+              <p className="img-hint" aria-live="polite">파일 {fileBusy}개 올리는 중…</p>
+            )}
+
+            <div className="img-actions">
+              <input
+                ref={attachRef}
+                type="file"
+                multiple
+                accept={FILE_ACCEPT}
+                className="file-input"
+                onChange={(e) => {
+                  routeFiles(e.target.files ?? [])
+                  e.target.value = '' // 같은 파일을 다시 골라도 변화가 잡히게
+                }}
+              />
+              <button
+                type="button"
+                className="btn-ghost btn-sm file-pick"
+                onClick={() => attachRef.current?.click()}
+                disabled={files.length >= MAX_FILES}
+              >📎 파일 첨부</button>
+              <p className="img-hint">
+                끌어놓기로도 올릴 수 있어요 · 최대 {MAX_FILES}개 · 개당 10MB ·
+                {' '}{FILE_EXTS.join('·')}
+              </p>
+            </div>
+          </div>
+        </div>
+
         {error && <p className="form-error" role="alert">{error}</p>}
 
         <div className="modal-foot">
@@ -699,18 +955,19 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
             <button className="btn-danger" onClick={handleDelete} disabled={busy}>삭제</button>
           )}
           <div className="modal-foot-right">
-            <button className="btn-ghost" onClick={onClose} disabled={busy}>취소</button>
+            <button className="btn-ghost" onClick={cleanupAndClose} disabled={busy}>취소</button>
             <button
               className="btn-primary"
               onClick={handleSave}
-              disabled={busy || uploading > 0 || !hasAnything}
+              disabled={busy || uploading > 0 || fileBusy > 0 || !hasAnything}
             >
               {progress
                 ? `${progress.done}/${progress.total} 저장 중...`
                 : busy ? '저장 중...'
                   : uploading > 0 ? '이미지 올리는 중...'
-                    : splitting ? `${allLinks.length}개 항목 저장`
-                      : '저장'}
+                    : fileBusy > 0 ? '파일 올리는 중...'
+                      : splitting ? `${allLinks.length}개 항목 저장`
+                        : '저장'}
             </button>
           </div>
         </div>
