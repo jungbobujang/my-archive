@@ -97,7 +97,9 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   // ✕ 로 뺐지만 DB 에는 아직 남아 있는 것들. 저장이 성공한 뒤에 지운다 —
   // 취소하고 닫으면 항목에는 그대로 붙어 있어야 하므로 그 자리에서 지우면 안 된다.
   const pendingRemoval = useRef({ images: [], files: [] })
-  const [needsSql, setNeedsSql] = useState(false)
+  // 화면에 그리지 않고 저장이 끝난 직후에 한 번 읽는 값이라 ref 다.
+  // state 로 두면 setState 가 반영되기 전에 읽게 돼 늘 false 였다.
+  const needsSql = useRef(false)
 
   // 링크마다 개별 항목으로 나눌지 (링크가 2개 이상일 때만 고를 수 있다)
   const [splitMode, setSplitMode] = useState(draft?.splitMode ?? false)
@@ -397,7 +399,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   async function runWithFilesFallback(run, payload) {
     const first = await run(payload)
     if (!first.error || !isMissingFilesColumn(first.error)) return first
-    setNeedsSql(true)
+    needsSql.current = true
     const { files: _omit, ...rest } = payload
     return run(rest)
   }
@@ -448,7 +450,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
 
   // files 열이 없어 첨부를 못 붙였다면 그 사실을 밖으로 알린다(모달은 닫히므로 토스트로).
   function sqlHint() {
-    return needsSql && files.length > 0
+    return needsSql.current && files.length > 0
       ? '첨부 파일은 붙이지 못했어요 — supabase/setup.sql 을 실행해 주세요'
       : null
   }
