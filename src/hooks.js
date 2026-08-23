@@ -1,5 +1,6 @@
 // 여러 모달이 똑같이 쓰던 자잘한 훅들.
 import { useEffect, useRef } from 'react'
+import { IDLE_TICK_MS } from './lock.js'
 
 // 폰에서 키보드가 올라오면 "실제로 보이는 높이"가 줄어든다.
 // 그런데 position: fixed 요소는 키보드와 무관하게 레이아웃 뷰포트 기준으로 남아 있어서,
@@ -65,6 +66,38 @@ export function useEscapeKey(handler, enabled = true) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [enabled])
+}
+
+// 자리비움 감시. 정해진 시간 동안 입력·터치·스크롤이 없으면 onIdle 을 부른다.
+//
+// setTimeout 을 한 번 걸어 두지 않고 짧은 간격으로 '마지막 움직임' 을 들여다보는 이유:
+// 노트북 덮개를 닫으면 타이머가 그대로 멈춰 있다가 깨어난 뒤에 남은 시간만큼 더 기다린다.
+// 시각을 재서 비교하면 덮개를 열자마자 '그동안 유휴였다' 를 알아본다.
+//
+// capture 로 듣는 이유: 모달 안쪽처럼 따로 스크롤되는 영역의 움직임도 세어야 한다.
+// passive 로 두는 이유: 스크롤·터치를 한 박자도 늦추지 않기 위해서다.
+export function useIdleLock({ enabled, minutes, onIdle }) {
+  const fire = useRef(onIdle)
+  useEffect(() => { fire.current = onIdle })
+
+  useEffect(() => {
+    if (!enabled) return
+    const events = ['pointerdown', 'keydown', 'wheel', 'touchstart', 'scroll', 'mousemove']
+    let last = Date.now()
+    const bump = () => { last = Date.now() }
+
+    for (const name of events) {
+      window.addEventListener(name, bump, { passive: true, capture: true })
+    }
+    const timer = setInterval(() => {
+      if (Date.now() - last >= minutes * 60_000) fire.current()
+    }, IDLE_TICK_MS)
+
+    return () => {
+      clearInterval(timer)
+      for (const name of events) window.removeEventListener(name, bump, { capture: true })
+    }
+  }, [enabled, minutes])
 }
 
 // 닫기 전에 한 번 물어본다. 쓰던 게 없으면 묻지 않는다.

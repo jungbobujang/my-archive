@@ -38,11 +38,14 @@ const browser = await puppeteer.launch({ headless: 'new' })
 
 // focusSel 을 주면 그 자리를 화면 안으로 굴린 뒤 찍는다. 모달은 스스로 세로 스크롤을
 // 하므로, 아래쪽에 있는 파일 영역은 굴리지 않으면 스크린샷에 아예 담기지 않는다.
-async function shot(name, url, width, height, focusSel) {
+// fullPage 를 끄면 '사람이 실제로 보는 만큼' 만 찍는다. 잠금 화면이 그렇다 —
+// 화면을 덮는 것이 일이므로, 문서 전체를 찍으면 덮을 필요가 없는 아래쪽까지 나와
+// 스크린샷만 보고는 새는 줄로 읽힌다.
+async function shot(name, url, width, height, focusSel, waitSel = '.modal', fullPage = true) {
   const page = await browser.newPage()
   await page.setViewport({ width, height, deviceScaleFactor: 2 })
   await page.goto(url, { waitUntil: 'networkidle0' })
-  await page.waitForSelector('.modal', { timeout: 15000 })
+  await page.waitForSelector(waitSel, { timeout: 15000 })
   if (focusSel) {
     await page.evaluate((sel) => {
       document.querySelector(sel)?.scrollIntoView({ block: 'center' })
@@ -112,10 +115,64 @@ async function shot(name, url, width, height, focusSel) {
         const x = row.querySelector('.link-x').getBoundingClientRect()
         return a.right > x.left + 1
       })(),
-      linkTexts: [...document.querySelectorAll('.link-row a')].map((a) => a.textContent.trim())
+      linkTexts: [...document.querySelectorAll('.link-row a')].map((a) => a.textContent.trim()),
+
+      // ── 잠금 화면 ──
+      lockBox: box('.lock-box'),
+      lockPin: box('.lock-pin'),
+      lockPinFont: (() => {
+        const el = document.querySelector('.lock-pin')
+        return el ? parseFloat(getComputedStyle(el).fontSize) : null
+      })(),
+      // 가림막이 정말 불투명한가. 알파가 1 이 아니면 뒤엣것이 비친다.
+      lockOpaque: (() => {
+        const el = document.querySelector('.lock-screen')
+        if (!el) return null
+        const bg = getComputedStyle(el).backgroundColor
+        const m = bg.match(/rgba?\(([^)]+)\)/)
+        if (!m) return false
+        const parts = m[1].split(',').map((s) => parseFloat(s))
+        return parts.length < 4 || parts[3] === 1
+      })(),
+      // 화면 전체를 덮는가 (한 귀퉁이라도 남으면 그리로 보인다)
+      lockCovers: (() => {
+        const el = document.querySelector('.lock-screen')
+        if (!el) return null
+        const r = el.getBoundingClientRect()
+        return r.top <= 0 && r.left <= 0
+          && r.width >= window.innerWidth && r.height >= window.innerHeight
+      })(),
+      // 손가락으로 뒤 페이지를 굴리지 못하게 막았는가.
+      // (overflow:hidden 은 '사람이 굴리는 것' 만 막는다. scrollTo 같은 코드는 그래도 굴러가고,
+      //  scrollHeight 도 내용 높이를 그대로 말한다. 그래서 이 값만 본다.)
+      lockScrollLocked: (() => {
+        if (!document.querySelector('.lock-screen')) return null
+        return getComputedStyle(document.documentElement).overflow === 'hidden'
+      })(),
+      // 그리고 어떤 이유로든 굴러갔더라도 가림막은 여전히 화면을 덮어야 한다.
+      // position: fixed 는 뷰포트를 따라다니므로 이것이 마지막 보루다.
+      lockCoversAfterScroll: (() => {
+        const el = document.querySelector('.lock-screen')
+        if (!el) return null
+        window.scrollTo(0, 5000)
+        const r = el.getBoundingClientRect()
+        const pts = [[10, 10], [window.innerWidth - 10, window.innerHeight - 10]]
+        const ok = r.top <= 0 && r.left <= 0
+          && r.width >= window.innerWidth && r.height >= window.innerHeight
+          && pts.every(([x, y]) => document.elementFromPoint(x, y)?.closest('.lock-screen'))
+        window.scrollTo(0, 0)
+        return ok
+      })(),
+      // 가림막 위에서 실제로 집히는 것이 잠금 화면인지 — 뒤엣것이 집히면 덮은 게 아니다
+      lockTopmost: (() => {
+        if (!document.querySelector('.lock-screen')) return null
+        const pts = [[10, 10], [window.innerWidth - 10, 10],
+                     [10, window.innerHeight - 10], [window.innerWidth - 10, window.innerHeight - 10]]
+        return pts.every(([x, y]) => document.elementFromPoint(x, y)?.closest('.lock-screen'))
+      })()
     }
   })
-  await page.screenshot({ path: path.join(outDir, name + '.png'), fullPage: true })
+  await page.screenshot({ path: path.join(outDir, name + '.png'), fullPage })
   await page.close()
   return info
 }
@@ -166,6 +223,28 @@ check('375px 다크: 가로 스크롤 없음', d.docScrollW <= 375, d.docScrollW
 const w = await shot('modal-1280-edit', `${base}?mode=edit`, 1280, 900)
 check('1280px: 가로 스크롤 없음', w.docScrollW <= 1280, w.docScrollW)
 check('1280px: 저장된 링크 3줄', w.linkRows === 3, w.linkRows)
+
+// 잠금 화면. 뒤에 글자를 잔뜩 깔아 둔 화면이라, 스크린샷에 그 글자가 한 자라도
+// 보이면 안 된다 — 사람 눈으로 확인할 것은 그것이다 (lock-375.png / lock-375-dark.png).
+const lk = await shot('lock-375', `${base}?mode=lock`, 375, 812, null, '.lock-screen', false)
+check('375px(잠금): 가로 스크롤 없음', lk.docScrollW <= 375, lk.docScrollW)
+check('375px(잠금): 화면 전체를 덮는다', lk.lockCovers === true)
+check('375px(잠금): 가림막이 불투명하다', lk.lockOpaque === true)
+check('375px(잠금): 네 귀퉁이 모두 가림막이 집힌다', lk.lockTopmost === true)
+check('375px(잠금): 손가락으로 뒤를 굴릴 수 없다', lk.lockScrollLocked === true)
+check('375px(잠금): 굴러가도 가림막은 그대로 덮는다', lk.lockCoversAfterScroll === true)
+check('375px(잠금): PIN 칸이 화면 안', lk.lockPin && lk.lockPin.w <= 375, JSON.stringify(lk.lockPin))
+check('375px(잠금): PIN 글꼴 16px 이상 (iOS 확대 방지)', lk.lockPinFont >= 16, lk.lockPinFont)
+check('375px(잠금): PIN 칸 44px 이상', lk.lockPin && lk.lockPin.h >= 44, JSON.stringify(lk.lockPin))
+
+const lkd = await shot('lock-375-dark', `${base}?mode=lock&theme=dark`, 375, 812, null, '.lock-screen', false)
+check('375px(잠금) 다크: 가로 스크롤 없음', lkd.docScrollW <= 375, lkd.docScrollW)
+check('375px(잠금) 다크: 가림막이 불투명하다', lkd.lockOpaque === true)
+
+const lkw = await shot('lock-1280', `${base}?mode=lock`, 1280, 900, null, '.lock-screen', false)
+check('1280px(잠금): 가로 스크롤 없음', lkw.docScrollW <= 1280, lkw.docScrollW)
+check('1280px(잠금): 가림막이 불투명하다', lkw.lockOpaque === true)
+check('1280px(잠금): 네 귀퉁이 모두 가림막이 집힌다', lkw.lockTopmost === true)
 
 await browser.close()
 await server.close()
