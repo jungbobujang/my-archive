@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   supabase, PAGE_SIZE, subtreeIds, childrenOf, fetchAllRows,
-  joinImages, uploadImage, imageFilesFromPaste, imageFilesFromDrop, ymd, MAX_IMAGES
+  joinImages, uploadImage, imageFilesFromPaste, imageFilesFromDrop, ymd, MAX_IMAGES,
+  parseFiles
 } from '../supabase.js'
 import { useTheme } from '../theme.js'
 import { useToast } from './Toast.jsx'
@@ -381,8 +382,17 @@ export default function Archive({ session, onNavigate }) {
         await fetchAllRows('item_categories')
       ]
 
+      // 첨부 파일은 items.files 에 '메타'(이름·경로·용량)로 딸려 나온다. 실체는 스토리지에
+       // 있고 백업에 담기지 않는다 — 파일까지 넣으면 백업 JSON 이 수백 MB 가 된다.
+      // 그래서 JSON 안에 그 사실을 적어 둔다. 나중에 이 파일만 보고도 알아야 한다.
+      const fileCount = allItems.reduce((n, it) => n + parseFiles(it.files).length, 0)
+
       const payload = {
         exported_at: new Date().toISOString(),
+        files_note:
+          '첨부 파일은 메타(이름·경로·용량)만 items.files 에 들어 있습니다. ' +
+          '파일 실체는 Supabase 스토리지의 files 버킷에 따로 있으며 이 백업에 포함되지 않습니다.',
+        file_count: fileCount,
         items: allItems,
         categories: allCategories,
         time_slots: allSlots,
@@ -401,7 +411,10 @@ export default function Archive({ session, onNavigate }) {
       a.click()
       a.remove()
       URL.revokeObjectURL(url)
-      toast.success(`백업 파일을 내려받았어요 (항목 ${allItems.length}개)`)
+      toast.success(
+        `백업 파일을 내려받았어요 (항목 ${allItems.length}개)`
+        + (fileCount > 0 ? ` · 첨부 파일 ${fileCount}개는 목록만 담겼어요` : '')
+      )
     } catch (err) {
       console.error(err)
       toast.error('백업에 실패했어요. 연결 상태를 확인하고 다시 시도해 주세요')
@@ -447,11 +460,20 @@ export default function Archive({ session, onNavigate }) {
     // time_slots 는 나중에 추가된 항목이라 옛 백업에는 없다. 없으면 그냥 건너뛴다.
     const backupSlots = Array.isArray(backup.time_slots) ? backup.time_slots : []
 
+    // 백업에 들어 있는 첨부 파일은 '목록'뿐이다. 같은 스토리지에 실체가 남아 있으면
+    // 그대로 이어지지만, 다른 프로젝트로 옮기는 복원이면 목록만 살아나 열리지 않는다.
+    // 복원을 되돌릴 수 없으니 누르기 전에 알려 준다.
+    const backupFiles = backup.items.reduce((n, it) => n + parseFiles(it.files).length, 0)
+
     const proceed = window.confirm(
       `백업의 항목 ${backup.items.length}개, 카테고리 ${backup.categories.length}개`
       + (backupSlots.length > 0 ? `, 시간대 ${backupSlots.length}개` : '')
       + '를 가져올까요? '
       + '기존 데이터는 삭제되지 않고, 같은 id의 데이터는 백업 내용으로 덮어써집니다.'
+      + (backupFiles > 0
+        ? `\n\n첨부 파일 ${backupFiles}개는 목록만 복원됩니다 — 파일 실체는 백업에 들어 있지 않고 `
+          + '스토리지에 그대로 있어야 열립니다.'
+        : '')
     )
     if (!proceed) return
 

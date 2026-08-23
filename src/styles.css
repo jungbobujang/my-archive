@@ -741,6 +741,85 @@ a:focus-visible {
 .img-file { font-size: 13px; }
 .img-hint { margin: 0; font-size: 12px; color: var(--ink-faint); line-height: 1.5; }
 
+/* ---------- 파일 첨부 ---------- */
+/* 이미지 드롭존과 같은 모양으로 둔다. 두 칸이 다르게 생기면 어디에 무엇을
+   떨어뜨려야 하는지 고민하게 되는데, 실제로는 어느 쪽이든 알아서 갈라 보낸다. */
+.file-drop {
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.file-drop-on { border-color: var(--accent); background: var(--bg); }
+
+.file-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.file-row { display: flex; align-items: center; gap: 4px; }
+
+/* 이름은 늘어나고, 아이콘·용량은 제 몫만 차지한다. 긴 한글 파일명이 용량을 밀어내면
+   "몇 MB 짜리인지" 를 못 보게 되므로 이름 쪽만 줄인다. */
+.file-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.file-open:hover { border-color: var(--accent); }
+.file-icon { flex: none; font-size: 15px; }
+.file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-size { flex: none; font-size: 12px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+
+/* 보이는 크기는 32px 로 두고 히트 영역만 넓힌다 (별표·체크박스와 같은 방식).
+   첨부 해제는 되돌릴 수 없으니 오히려 너무 크면 곤란한데, 32px 는 손가락에 작다. */
+.file-x {
+  position: relative;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+/* 세로는 줄 높이(42px) 안에 머무르게 -4px 까지만 — 더 넓히면 위아래 줄의 ✕ 와 겹쳐
+   엉뚱한 파일이 떨어져 나간다. 가로는 여유가 있으니 44px 까지 넓힌다. */
+.file-x::after { content: ''; position: absolute; inset: -4px -6px; }
+.file-x:hover { color: var(--danger); border-color: var(--danger-line); }
+
+.file-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+/* 진짜 input 은 숨기고 버튼으로 연다 — 브라우저마다 '선택된 파일 없음' 문구가 제각각이라
+   좁은 화면에서 줄을 밀어낸다. 화면에서 감추되 초점은 받을 수 있게 둔다. */
+.file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 저장소 사용량 게이지 */
+.gauge {
+  margin-top: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.gauge-fill { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+.gauge-warn .gauge-fill { background: var(--c-amber-mid); }
+
 /* 크게 보기 */
 .img-zoom {
   position: fixed;

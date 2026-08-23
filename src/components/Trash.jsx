@@ -1,6 +1,6 @@
 // 휴지통. items.deleted_at 이 채워진 행만 모아 복원하거나 영구 삭제한다.
 import { useCallback, useEffect, useState } from 'react'
-import { supabase } from '../supabase.js'
+import { supabase, parseFiles, removeFiles } from '../supabase.js'
 import { useEscapeKey } from '../hooks.js'
 import { SkeletonRows } from './Skeleton.jsx'
 
@@ -45,9 +45,16 @@ export default function Trash({ onClose, onChanged }) {
     setRows((prev) => prev.filter((r) => r.id !== item.id))
   }
 
+  // 첨부 파일은 DB 행과 함께 사라지지 않는다(스토리지는 별개다).
+  // 행을 지우기 '전에' 경로를 모아 둬야 한다 — 지운 뒤에는 어디에 뭐가 있었는지 알 길이 없다.
+  // 파일 정리가 실패해도 항목 삭제는 계속한다. 실패하면 removeFiles 가 콘솔에 남기고,
+  // 남은 실체는 설정의 사용량 게이지에 잡힌다.
+  const filePathsOf = (list) => list.flatMap((r) => parseFiles(r.files).map((f) => f.path))
+
   async function purge(item) {
     if (!window.confirm('영구 삭제할까요? 이 항목은 되돌릴 수 없습니다.')) return
     setBusy(true)
+    await removeFiles(filePathsOf([item]))
     // item_categories 는 on delete cascade 로 함께 지워진다
     const { error: err } = await supabase.from('items').delete().eq('id', item.id)
     setBusy(false)
@@ -57,8 +64,13 @@ export default function Trash({ onClose, onChanged }) {
 
   async function purgeAll() {
     if (rows.length === 0) return
-    if (!window.confirm(`휴지통의 ${rows.length}개 항목을 모두 영구 삭제할까요? 되돌릴 수 없습니다.`)) return
+    const fileCount = filePathsOf(rows).length
+    if (!window.confirm(
+      `휴지통의 ${rows.length}개 항목을 모두 영구 삭제할까요? 되돌릴 수 없습니다.`
+      + (fileCount > 0 ? `\n첨부 파일 ${fileCount}개도 함께 지워집니다.` : '')
+    )) return
     setBusy(true)
+    await removeFiles(filePathsOf(rows))
     const { error: err } = await supabase
       .from('items').delete().not('deleted_at', 'is', null)
     setBusy(false)

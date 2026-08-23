@@ -117,6 +117,9 @@ alter table public.items add column if not exists slot_id uuid
   references public.time_slots(id) on delete set null;
 alter table public.items add column if not exists link_url text;
 alter table public.items add column if not exists deleted_at timestamptz;
+-- 첨부 파일 '메타'만 담는다(이름·경로·용량). 실체는 files 버킷에 있다.
+alter table public.items add column if not exists files jsonb not null default '[]'::jsonb;
+update public.items set files = '[]'::jsonb where files is null;
 
 -- v1.0 에서 category 가 not null 이었다. 코드가 값을 넣지 않으므로 제약을 푼다.
 alter table public.items alter column category drop not null;
@@ -200,6 +203,39 @@ drop policy if exists "archive images delete" on storage.objects;
 create policy "archive images delete" on storage.objects
   for delete using (
     bucket_id = 'archive-images' and auth.uid() = owner
+  );
+
+
+-- ============================================================
+-- 5-2) 파일 스토리지 (비공개 — 올린 사람만 읽고 지운다)
+--
+--     이미지 버킷과 나눈 이유: 이미지는 카드 썸네일이 <img> 로 바로 떠야 해서
+--     공개 읽기지만, 문서는 주소만 알면 누구나 받을 수 있으면 안 된다.
+--     앱은 누를 때마다 60초짜리 서명 주소를 받아 내려받는다.
+-- ============================================================
+insert into storage.buckets (id, name, public)
+values ('files', 'files', false)
+on conflict (id) do nothing;
+
+-- 예전에 공개로 만들어 둔 적이 있어도 비공개로 되돌린다
+update storage.buckets set public = false where id = 'files';
+
+drop policy if exists "archive files read" on storage.objects;
+create policy "archive files read" on storage.objects
+  for select using (
+    bucket_id = 'files' and auth.uid() = owner
+  );
+
+drop policy if exists "archive files upload" on storage.objects;
+create policy "archive files upload" on storage.objects
+  for insert with check (
+    bucket_id = 'files' and auth.role() = 'authenticated'
+  );
+
+drop policy if exists "archive files delete" on storage.objects;
+create policy "archive files delete" on storage.objects
+  for delete using (
+    bucket_id = 'files' and auth.uid() = owner
   );
 
 
