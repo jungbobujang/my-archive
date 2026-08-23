@@ -32,7 +32,8 @@ const Trash = (await import('../src/components/Trash.jsx')).default
 const Settings = (await import('../src/components/Settings.jsx')).default
 
 let confirmAnswer = true
-window.confirm = () => confirmAnswer
+let lastConfirm = null
+window.confirm = (m) => { lastConfirm = m; return confirmAnswer }
 
 const checks = []
 const check = (name, cond, extra) => checks.push({ name, ok: !!cond, extra })
@@ -177,7 +178,9 @@ const imagesBucket = () => store.buckets['archive-images']
   await act(async () => { click(q(host, '.btn-primary')) })
   const row = store.rows.items[0]
   check('저장된 항목이 1개', store.rows.items.length === 1, store.rows.items.length)
-  check('제목이 파일 이름', row?.title === '2026학년도 계획서.hwp', row?.title)
+  // 제목 자동 생성에 파일 이름은 쓰지 않는다(사양 밖이라 뺐다).
+  // 링크도 내용도 이미지도 없으면 예전처럼 '메모 YYYY-MM-DD' 다.
+  check('제목에 파일 이름을 쓰지 않는다', /^메모 \d{4}-\d{2}-\d{2}$/.test(row?.title ?? ''), row?.title)
   check('files 에 메타 3가지만', JSON.stringify(row?.files) === JSON.stringify([{ path: key, name: '2026학년도 계획서.hwp', size: 1234 }]), JSON.stringify(row?.files))
   check('저장 뒤에도 스토리지에 남아 있다', filesBucket().has(key))
   check('저장 뒤 초안은 지워진다', window.sessionStorage.getItem('ma:draft:new') === null)
@@ -211,6 +214,52 @@ const imagesBucket = () => store.buckets['archive-images']
   check('초안이 지워진 파일을 가리키지 않는다', !draft || (draft.images ?? []).length === 0,
     draft && JSON.stringify(draft.images))
   act(() => { root.unmount() })
+}
+
+// ── 8-b. 닫기 확인 문구가 첨부도 사라진다고 알린다 ──────────
+{
+  // ① 첨부가 있을 때
+  resetStore()
+  window.sessionStorage.clear()
+  lastConfirm = null
+  let closed = 0
+  let m = mount(React.createElement(ItemModal, {
+    item: null, categories: [], slots: [], userId: 'u1',
+    onClose: () => { closed++ }, onSaved: () => {}
+  }))
+  await attach(m.host, [realFile('계획서.hwp', 10)])
+
+  confirmAnswer = false
+  await act(async () => { window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' })) })
+  check('Esc: 첨부가 사라진다고 적는다', (lastConfirm ?? '').includes('첨부한 이미지/파일도 함께 삭제됩니다'), lastConfirm)
+  check('Esc: 취소하면 안 닫힌다', closed === 0, closed)
+  check('Esc: 취소하면 첨부도 그대로', filesBucket().size === 1, filesBucket().size)
+
+  confirmAnswer = true
+  await act(async () => { window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' })) })
+  check('Esc: 그렇다고 하면 닫힌다', closed === 1, closed)
+  check('Esc: 그때 첨부가 지워진다', filesBucket().size === 0, filesBucket().size)
+  act(() => { m.root.unmount() })
+
+  // ② 첨부가 없을 때는 예전 문구 그대로
+  resetStore()
+  window.sessionStorage.clear()
+  lastConfirm = null
+  m = mount(React.createElement(ItemModal, {
+    item: null, categories: [], slots: [], userId: 'u1',
+    onClose: () => {}, onSaved: () => {}
+  }))
+  const titleInput = m.host.querySelector('input')
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    setter.call(titleInput, '글만 씀')
+    titleInput.dispatchEvent(new window.Event('input', { bubbles: true }))
+  })
+  confirmAnswer = true
+  await act(async () => { window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' })) })
+  check('Esc: 첨부가 없으면 첨부 이야기를 하지 않는다', !(lastConfirm ?? '').includes('첨부한'), lastConfirm)
+  check('Esc: 그래도 물어보기는 한다', (lastConfirm ?? '').includes('작성 중인 내용이 있습니다'), lastConfirm)
+  act(() => { m.root.unmount() })
 }
 
 // ── 9. ✕ 로 뺀 새 파일은 그 자리에서 지워진다 ───────────────
@@ -316,16 +365,27 @@ const imagesBucket = () => store.buckets['archive-images']
 // ── 13. 영구 삭제 뒤 고아가 남지 않는다 ─────────────────────
 {
   resetStore()
+  const pub = (p) => `https://fake.local/storage/v1/object/public/archive-images/${encodeURI(p)}`
   const mkItem = (id, n) => {
     const files = [
       { path: `${id}/1_가${n}.pdf`, name: `가${n}.pdf`, size: 10 },
       { path: `${id}/2_나${n}.hwp`, name: `나${n}.hwp`, size: 20 }
     ]
     for (const f of files) filesBucket().set(f.path, { size: f.size })
-    return { id, title: `항목 ${n}`, deleted_at: '2026-08-20T00:00:00.000Z', files }
+    const imgPath = `u1/${n}-shot.png`
+    imagesBucket().set(imgPath, { size: 5 })
+    return {
+      id,
+      title: `항목 ${n}`,
+      deleted_at: '2026-08-20T00:00:00.000Z',
+      files,
+      // 우리 버킷 이미지 한 장 + 유튜브 썸네일 한 장. 뒤엣것은 지울 대상이 아니다.
+      image_url: [pub(imgPath), 'https://img.youtube.com/vi/abc/hqdefault.jpg'].join('\n')
+    }
   }
   store.rows.items.push(mkItem('itA', 1), mkItem('itB', 2), mkItem('itC', 3))
-  check('준비: 파일 6개', filesBucket().size === 6, filesBucket().size)
+  check('준비: 파일 6개 · 이미지 3장', filesBucket().size === 6 && imagesBucket().size === 3,
+    `${filesBucket().size}/${imagesBucket().size}`)
 
   const { host, root } = mount(React.createElement(Trash, { onClose: () => {}, onChanged: () => {} }))
   await act(async () => {}) // 목록 불러오기
@@ -338,10 +398,18 @@ const imagesBucket = () => store.buckets['archive-images']
   check('지운 항목의 파일이 없다', ![...filesBucket().keys()].some((k) => k.startsWith('itB/')))
   check('남은 항목의 파일은 그대로', ['itA/1_가1.pdf', 'itA/2_나1.hwp', 'itC/1_가3.pdf', 'itC/2_나3.hwp']
     .every((k) => filesBucket().has(k)))
+  check('한 건 영구 삭제 → 그 항목 이미지도 사라진다', imagesBucket().size === 2, imagesBucket().size)
+  check('지운 항목의 이미지가 없다', !imagesBucket().has('u1/2-shot.png'))
+  check('남은 항목의 이미지는 그대로', imagesBucket().has('u1/1-shot.png') && imagesBucket().has('u1/3-shot.png'))
 
   await act(async () => { click(q(host, '.trash-top .btn-danger')) }) // 전부 비우기
-  check('전부 비우기 → 고아 0', filesBucket().size === 0, [...filesBucket().keys()].join())
+  check('전부 비우기 → 파일 고아 0', filesBucket().size === 0, [...filesBucket().keys()].join())
+  check('전부 비우기 → 이미지 고아 0', imagesBucket().size === 0, [...imagesBucket().keys()].join())
   check('행도 남지 않는다', store.rows.items.length === 0, store.rows.items.length)
+  // 유튜브 썸네일은 우리 버킷 밖이라 지울 목록에 들지 않는다
+  const removedImages = store.calls.remove.filter((c) => c.bucket === 'archive-images').flatMap((c) => c.paths)
+  check('바깥 주소(유튜브 썸네일)는 지우려 들지 않는다',
+    !removedImages.some((p) => p.includes('youtube')), removedImages.join(' '))
   act(() => { root.unmount() })
 }
 

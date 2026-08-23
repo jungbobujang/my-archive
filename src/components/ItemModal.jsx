@@ -184,10 +184,20 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     onClose()
   }
 
+  // 닫으면 사라질 첨부의 개수. 이미 항목에 붙어 있던 것은 그대로 남으므로 세지 않는다.
+  const droppingCount =
+    images.filter((u) => !savedImages.includes(u)).length +
+    files.filter((f) => !savedFilePaths.has(f.path)).length
+
   // Esc 는 손이 미끄러지기 쉬운 자리라, 쓰던 게 있으면 한 번 물어본다.
   // ✕·취소는 눌러야 닿는 자리라 그냥 닫는다 (어차피 글·링크 초안은 남는다).
+  // 이번에 올린 첨부가 있으면 그것이 사라진다는 것을 문구에 적는다 — 글은 초안으로
+  // 되살아나지만 첨부는 되살아나지 않으므로, 같은 '닫기' 라도 잃는 것이 다르다.
   function closeFromEscape() {
-    if (!confirmDiscard(dirty)) return
+    const message = droppingCount > 0
+      ? '작성 중인 내용이 있습니다. 닫을까요?\n첨부한 이미지/파일도 함께 삭제됩니다.'
+      : undefined
+    if (!confirmDiscard(dirty, message)) return
     cleanupAndClose()
   }
 
@@ -381,10 +391,9 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   // 제목이 비었을 때 대신 지어 준다.
   //   ① 링크가 있으면 첫 링크의 제목 (noembed)
   //   ② 내용이 있으면 앞 20자
-  //   ③ 파일이 있으면 첫 파일의 이름
-  //   ④ 이미지만 있으면 '이미지 YYYY-MM-DD'
-  // ②를 아래보다 앞에 둔 이유: 글과 함께 있을 때 글 첫머리가 훨씬 잘 읽힌다.
-  // ③을 ④보다 앞에 둔 이유: 파일은 이미지와 달리 이름이 있고, 이름이 날짜보다 낫다.
+  //   ③ 이미지만 있으면 '이미지 YYYY-MM-DD'
+  // ②를 ③보다 앞에 둔 이유: 글과 이미지가 함께 있을 때 날짜보다 글 첫머리가 훨씬 잘 읽힌다.
+  // 첨부 파일 이름은 쓰지 않는다 — 사양에 없다.
   async function makeTitle(firstLink) {
     if (firstLink) {
       const fetched = await fetchLinkTitle(firstLink)
@@ -392,7 +401,6 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     }
     const body = content.trim()
     if (body) return body.slice(0, 20)
-    if (files.length > 0) return files[0].name
     if (images.length > 0) return `이미지 ${ymd(new Date())}`
     return firstLink || `메모 ${ymd(new Date())}`
   }
