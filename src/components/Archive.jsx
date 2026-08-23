@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   supabase, PAGE_SIZE, subtreeIds, childrenOf, fetchAllRows,
-  joinImages, uploadImage, imageFilesFromPaste, imageFilesFromDrop, ymd, MAX_IMAGES
+  joinImages, uploadImage, imageFilesFromPaste, imageFilesFromDrop, ymd, MAX_IMAGES,
+  parseFiles
 } from '../supabase.js'
 import { useTheme } from '../theme.js'
 import { useToast } from './Toast.jsx'
@@ -383,7 +384,16 @@ export default function Archive({ session, onNavigate }) {
 
       const payload = {
         exported_at: new Date().toISOString(),
-        items: allItems,
+        // 첨부 파일은 '메타만' 들어간다. 파일 실체를 JSON 에 담으면(base64) 10MB 짜리
+        // 다섯 개만 있어도 백업이 수십 MB 로 부풀어 브라우저에서 만들다 멈춘다.
+        // 읽는 사람이 그 사실을 알 수 있도록 파일 안에도 한 줄 적어 둔다.
+        files_note: '첨부 파일의 실체는 이 백업에 들어 있지 않습니다. '
+          + 'items[].files 는 이름(name)·경로(path)·용량(size) 만 담고, '
+          + '파일 자체는 Supabase 스토리지의 archive-files 버킷에 있습니다.',
+        // 혹시 다른 열쇠가 섞여 들어가도 메타 세 가지만 남긴다
+        items: allItems.map((it) => (
+          it.files === undefined ? it : { ...it, files: parseFiles(it.files) }
+        )),
         categories: allCategories,
         time_slots: allSlots,
         item_categories: allLinks
@@ -401,7 +411,9 @@ export default function Archive({ session, onNavigate }) {
       a.click()
       a.remove()
       URL.revokeObjectURL(url)
-      toast.success(`백업 파일을 내려받았어요 (항목 ${allItems.length}개)`)
+      toast.success(
+        `백업 파일을 내려받았어요 (항목 ${allItems.length}개 · 첨부 파일 실체는 별도)`
+      )
     } catch (err) {
       console.error(err)
       toast.error('백업에 실패했어요. 연결 상태를 확인하고 다시 시도해 주세요')
