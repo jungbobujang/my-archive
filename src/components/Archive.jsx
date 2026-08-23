@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   supabase, PAGE_SIZE, subtreeIds, childrenOf, fetchAllRows,
   joinImages, uploadImage, imageFilesFromPaste, imageFilesFromDrop, ymd, MAX_IMAGES,
-  parseFiles
+  parseFiles, removeStorageImages
 } from '../supabase.js'
 import { useTheme } from '../theme.js'
 import { useToast } from './Toast.jsx'
@@ -360,6 +360,9 @@ export default function Archive({ session, onNavigate }) {
       user_id: session.user.id
     })
     if (error) {
+      // 올리기는 됐는데 행이 안 들어간 경우다. 그대로 두면 아무 항목도 가리키지 않는
+      // 이미지가 스토리지에 남는다 — 화면에는 보이지 않아 나중에 찾을 방법도 없다.
+      await removeStorageImages(urls)
       toast.error('저장하지 못했어요. 연결 상태를 확인해 주세요')
       return
     }
