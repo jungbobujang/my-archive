@@ -5,7 +5,7 @@
 // 대신 Archive 쪽에서 콜백을 useCallback 으로 고정하고 categoryIds 도
 // 없을 때 같은 빈 배열을 넘겨야 memo 가 실제로 걸린다.
 import { memo } from 'react'
-import { parseImages } from '../supabase.js'
+import { parseFiles, parseImages } from '../supabase.js'
 
 function formatDate(iso) {
   const d = new Date(iso)
@@ -30,6 +30,8 @@ function ItemCard({ item, categories, categoryIds, view, onOpen, onStar, onTag, 
   const images = parseImages(item.image_url)
   const cover = images[0] ?? null
   const more = images.length - 1
+  // 첨부 파일은 개수만 알린다. 이름·용량은 모달에서 본다.
+  const fileCount = parseFiles(item.files).length
 
   return (
     <article className={`card cat-border-${color} ${view === 'list' ? 'card-row' : ''} ${done ? 'card-done' : ''}`}>
@@ -86,6 +88,7 @@ function ItemCard({ item, categories, categoryIds, view, onOpen, onStar, onTag, 
           {links.length > 1 && (
             <button className="link-mini link-mini-btn" onClick={() => onOpen(item)}>🔗 링크 {links.length}개</button>
           )}
+          {fileCount > 0 && <span className="badge badge-gray">📎{fileCount}</span>}
           <span className="card-date">{formatDate(item.created_at)}</span>
         </div>
       </div>
