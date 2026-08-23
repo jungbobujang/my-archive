@@ -36,11 +36,18 @@ const checks = []
 const check = (name, ok, extra) => checks.push({ name, ok: !!ok, extra })
 const browser = await puppeteer.launch({ headless: 'new' })
 
-async function shot(name, url, width, height) {
+// focusSel 을 주면 그 자리를 화면 안으로 굴린 뒤 찍는다. 모달은 스스로 세로 스크롤을
+// 하므로, 아래쪽에 있는 파일 영역은 굴리지 않으면 스크린샷에 아예 담기지 않는다.
+async function shot(name, url, width, height, focusSel) {
   const page = await browser.newPage()
   await page.setViewport({ width, height, deviceScaleFactor: 2 })
   await page.goto(url, { waitUntil: 'networkidle0' })
   await page.waitForSelector('.modal', { timeout: 15000 })
+  if (focusSel) {
+    await page.evaluate((sel) => {
+      document.querySelector(sel)?.scrollIntoView({ block: 'center' })
+    }, focusSel)
+  }
   const info = await page.evaluate(() => {
     const box = (sel) => {
       const el = document.querySelector(sel)
@@ -72,6 +79,32 @@ async function shot(name, url, width, height) {
         return el ? parseFloat(getComputedStyle(el).fontSize) : null
       })(),
       rowOverflow: [...document.querySelectorAll('.link-row')].some((r) => r.scrollWidth > r.clientWidth + 1),
+      fileRows: document.querySelectorAll('.file-row').length,
+      filePick: box('.file-pick'),
+      fileDrop: box('.file-drop'),
+      fileXHit: hit('.file-row .link-x'),
+      // 기본 파일 위젯은 고른 파일명을 그대로 늘여 좁은 화면을 넘긴다. 숨겨져 있어야 한다.
+      fileInputHidden: (() => {
+        const el = document.querySelector('.file-input')
+        return el ? getComputedStyle(el).display === 'none' : null
+      })(),
+      fileRowOverflow: [...document.querySelectorAll('.file-row')].some((r) => r.scrollWidth > r.clientWidth + 1),
+      fileNameOverlapsX: (() => {
+        const row = document.querySelector('.file-row')
+        if (!row) return null
+        const a = row.querySelector('.file-open').getBoundingClientRect()
+        const x = row.querySelector('.link-x').getBoundingClientRect()
+        return a.right > x.left + 1
+      })(),
+      // 지시대로 이미지 영역 '아래' 인지는 DOM 순서가 아니라 화면 좌표로 본다
+      fileBelowImage: (() => {
+        const img = document.querySelector('.img-drop')
+        const f = document.querySelector('.file-drop')
+        if (!img || !f) return null
+        return f.getBoundingClientRect().top >= img.getBoundingClientRect().bottom - 1
+      })(),
+      fileNames: [...document.querySelectorAll('.file-name')].map((el) => el.textContent.trim()),
+      fileSizes: [...document.querySelectorAll('.file-size')].map((el) => el.textContent.trim()),
       anchorOverlapsX: (() => {
         const row = document.querySelector('.link-row')
         if (!row) return null
@@ -105,6 +138,27 @@ const mu = await shot('modal-375-multi', `${base}?mode=multi`, 375, 900)
 check('375px(링크 3개): 가로 스크롤 없음', mu.docScrollW <= 375, mu.docScrollW)
 check('375px(링크 3개): 3줄', mu.linkRows === 3, mu.linkRows)
 check('375px(링크 3개): 서로 다른 링크가 다르게 보인다', new Set(mu.linkTexts).size === 3, mu.linkTexts.join(' | '))
+
+const f = await shot('modal-375-files', `${base}?mode=files`, 375, 900, '.file-drop')
+check('375px(파일): 가로 스크롤 없음', f.docScrollW <= 375, f.docScrollW)
+check('375px(파일): 3줄', f.fileRows === 3, f.fileRows)
+check('375px(파일): 파일 영역이 이미지 영역 아래', f.fileBelowImage === true)
+check('375px(파일): 파일 영역이 모달 폭 안', f.fileDrop && f.modal && f.fileDrop.w <= f.modal.w, JSON.stringify(f.fileDrop))
+check('375px(파일): 줄이 옆으로 넘치지 않는다', f.fileRowOverflow === false)
+check('375px(파일): 긴 이름이 ✕ 를 덮지 않는다', f.fileNameOverlapsX === false)
+check('375px(파일): 빼기(✕) 손가락 영역 40px 급', f.fileXHit && f.fileXHit.h >= 40 && f.fileXHit.w >= 38, JSON.stringify(f.fileXHit))
+check('375px(파일): 첨부 버튼 44px 이상', f.filePick && f.filePick.h >= 44, JSON.stringify(f.filePick))
+check('375px(파일): 기본 파일 위젯은 숨어 있다', f.fileInputHidden === true)
+check('375px(파일): 이름이 잘리지 않고 그대로', f.fileNames[1] === '학생 명단.xlsx', f.fileNames.join(' | '))
+check('375px(파일): 용량이 붙어 있다', f.fileSizes.join(' ') === '2.3MB 18KB 940B', f.fileSizes.join(' '))
+
+const fw = await shot('modal-1280-files', `${base}?mode=files`, 1280, 900, '.file-drop')
+check('1280px(파일): 가로 스크롤 없음', fw.docScrollW <= 1280, fw.docScrollW)
+check('1280px(파일): 긴 이름이 ✕ 를 덮지 않는다', fw.fileNameOverlapsX === false)
+
+const fd = await shot('modal-375-files-dark', `${base}?mode=files&theme=dark`, 375, 900, '.file-drop')
+check('375px(파일) 다크: 가로 스크롤 없음', fd.docScrollW <= 375, fd.docScrollW)
+check('375px(파일) 다크: 3줄', fd.fileRows === 3, fd.fileRows)
 
 const d = await shot('modal-375-dark', `${base}?mode=edit&theme=dark`, 375, 812)
 check('375px 다크: 가로 스크롤 없음', d.docScrollW <= 375, d.docScrollW)

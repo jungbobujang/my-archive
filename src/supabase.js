@@ -115,7 +115,188 @@ export async function uploadImage(file, userId) {
   return data.publicUrl
 }
 
-// 붙여넣기·드롭에서 이미지 파일만 골라낸다
+// ---------- 일반 파일 첨부 ----------
+//
+// 이미지와 버킷을 나눈다(archive-files). 이미지는 공개 버킷이지만 파일은 비공개다 —
+// 한글 문서·표·압축본이 들어오는 자리라, 주소만 알면 누구나 받을 수 있는 상태로 두지 않는다.
+// 대신 받을 때마다 짧은 서명 주소를 만들어 준다(signedFileUrl).
+//
+// 메타(이름·경로·용량)는 items.files 한 열에 jsonb 배열로 담는다. 이미지처럼 표를 나누지
+// 않은 이유는 같지만, 파일은 이미지와 달리 '이름'과 '용량'을 함께 보여 줘야 해서
+// 줄바꿈 문자열로는 담을 수 없다. jsonb 한 열이면 select('*') 도, 백업 내보내기/가져오기도
+// 지금 코드 그대로 돌아간다(열 하나가 늘 뿐이다).
+export const FILE_BUCKET = 'archive-files'
+export const MAX_FILES = 5
+export const FILE_MAX_BYTES = 10 * 1024 * 1024
+export const FILE_EXTS = ['hwp', 'hwpx', 'pdf', 'docx', 'xlsx', 'pptx', 'txt', 'zip']
+// 무료 플랜 기준. 게이지 표시에만 쓰고, 넘는다고 막지는 않는다 (실제 상한은 Supabase 가 건다).
+export const STORAGE_QUOTA_BYTES = 1024 * 1024 * 1024
+export const STORAGE_WARN_RATIO = 0.8
+
+const FILE_ICONS = {
+  pdf: '📕', hwp: '📘', hwpx: '📘', docx: '📄',
+  xlsx: '📊', pptx: '📽', txt: '📃', zip: '🗜'
+}
+
+export function extOfName(name) {
+  const m = /\.([^.]+)$/.exec(String(name ?? ''))
+  return m ? m[1].toLowerCase() : ''
+}
+
+export function fileIcon(name) {
+  return FILE_ICONS[extOfName(name)] ?? '📎'
+}
+
+// 사람이 읽는 용량. 오류 문구("현재 12.3MB")와 사용량 게이지가 같은 함수를 쓴다.
+export function formatBytes(n) {
+  const v = Number(n) || 0
+  if (v >= 1024 * 1024) return `${(v / 1024 / 1024).toFixed(1)}MB`
+  if (v >= 1024) return `${Math.round(v / 1024)}KB`
+  return `${v}B`
+}
+
+// 붙일 수 있는 파일인지. 붙일 수 없으면 그 이유를 문장으로 돌려준다(없으면 null).
+// 확장자를 먼저 본다 — 100MB 짜리 exe 에 "10MB 이하만" 이라고 답하면 엉뚱한 안내가 된다.
+export function fileRejectReason(file, currentCount = 0) {
+  const name = file?.name ?? ''
+  if (!FILE_EXTS.includes(extOfName(name))) {
+    const ext = extOfName(name)
+    return `${FILE_EXTS.join('·')} 만 첨부할 수 있습니다${ext ? ` (.${ext})` : ''}`
+  }
+  if ((file?.size ?? 0) > FILE_MAX_BYTES) {
+    return `10MB 이하만 첨부할 수 있습니다 (현재 ${formatBytes(file.size)})`
+  }
+  if (currentCount >= MAX_FILES) return `파일은 최대 ${MAX_FILES}개까지예요`
+  return null
+}
+
+// 저장 키: {항목id}/{타임스탬프}_{원본명}. 원본명을 그대로 둔다 — 나중에 스토리지를
+// 직접 열어 봤을 때 무엇인지 알아볼 수 있어야 한다. 폴더가 생기지 않게 / \ 만 바꾼다.
+// encoded 는 서버가 키를 거부했을 때 쓰는 물러설 자리다(uploadFile 참고).
+export function storageKeyFor(itemId, name, stamp = Date.now(), encoded = false) {
+  const base = String(name || 'file').replace(/[\/]/g, '_').trim() || 'file'
+  return `${itemId}/${stamp}_${encoded ? encodeURIComponent(base) : base}`
+}
+
+// 키에서 원본 이름을 되찾는다. 퍼센트 인코딩된 키도 같은 이름으로 돌아온다.
+export function originalNameFromKey(key) {
+  const last = String(key ?? '').split('/').pop() ?? ''
+  const raw = last.replace(/^\d+_/, '')
+  try { return decodeURIComponent(raw) } catch { return raw }
+}
+
+// items.files 값을 { path, name, size } 목록으로 고른다.
+// jsonb 배열이 정본이지만, 열이 아직 없는 DB(‑> undefined)나 문자열로 온 값도 견딘다.
+export function parseFiles(value) {
+  let rows = value
+  if (typeof rows === 'string') {
+    try { rows = JSON.parse(rows) } catch { return [] }
+  }
+  if (!Array.isArray(rows)) return []
+  const seen = new Set()
+  const out = []
+  for (const r of rows) {
+    const path = typeof r === 'string' ? r : r?.path
+    if (!path || seen.has(path)) continue
+    seen.add(path)
+    out.push({
+      path,
+      name: (typeof r === 'object' && r?.name) || originalNameFromKey(path),
+      size: Number(typeof r === 'object' ? r?.size : 0) || 0
+    })
+  }
+  return out
+}
+
+export function joinFiles(list) {
+  return parseFiles(list ?? [])
+}
+
+export function filePathsOf(item) {
+  return parseFiles(item?.files).map((f) => f.path)
+}
+
+export function totalFileBytes(items) {
+  let sum = 0
+  for (const it of items ?? []) for (const f of parseFiles(it?.files)) sum += f.size
+  return sum
+}
+
+// 파일 한 개 올리기. 원본명이 그대로 들어간 키를 먼저 쓰고, 서버가 키를 거부하면
+// (한글 등 비ASCII 를 막는 배포본이 있다) 퍼센트 인코딩한 키로 한 번만 물러선다.
+// 어느 쪽이든 화면에 보이는 이름(name)은 원본 그대로다.
+export async function uploadFile(file, itemId) {
+  const stamp = Date.now()
+  const opts = { contentType: file.type || 'application/octet-stream', upsert: false }
+  let path = storageKeyFor(itemId, file.name, stamp)
+  let { error } = await supabase.storage.from(FILE_BUCKET).upload(path, file, opts)
+  if (error && /invalid key/i.test(error.message ?? '')) {
+    path = storageKeyFor(itemId, file.name, stamp, true)
+    ;({ error } = await supabase.storage.from(FILE_BUCKET).upload(path, file, opts))
+  }
+  if (error) throw error
+  return { path, name: file.name, size: file.size }
+}
+
+// 비공개 버킷이라 받을 때마다 짧은 주소를 만든다. download 를 주면 원본 이름으로 저장된다.
+export async function signedFileUrl(path, name) {
+  const { data, error } = await supabase.storage
+    .from(FILE_BUCKET)
+    .createSignedUrl(path, 60, name ? { download: name } : undefined)
+  if (error) throw error
+  return data.signedUrl
+}
+
+// 스토리지에서 지운다. 지우기 실패는 화면 흐름을 막지 않는다 — 남은 것은 고아일 뿐이고,
+// 그 때문에 저장이나 삭제가 실패한 것처럼 보이면 사용자가 같은 일을 반복하게 된다.
+export async function removeStorageFiles(paths) {
+  const list = [...new Set((paths ?? []).filter(Boolean))]
+  if (list.length === 0) return
+  try {
+    await supabase.storage.from(FILE_BUCKET).remove(list)
+  } catch (err) {
+    console.warn('[storage] 파일 삭제 실패:', err)
+  }
+}
+
+// 공개 URL 에서 버킷 안 경로를 되찾는다. 우리가 올린 것이 아니면(유튜브 썸네일 등) null.
+export function imagePathFromUrl(url) {
+  const marker = `/storage/v1/object/public/${BUCKET}/`
+  const at = String(url ?? '').indexOf(marker)
+  if (at < 0) return null
+  try { return decodeURIComponent(String(url).slice(at + marker.length)) } catch { return null }
+}
+
+export async function removeStorageImages(urls) {
+  const paths = (urls ?? []).map(imagePathFromUrl).filter(Boolean)
+  if (paths.length === 0) return
+  try {
+    await supabase.storage.from(BUCKET).remove([...new Set(paths)])
+  } catch (err) {
+    console.warn('[storage] 이미지 삭제 실패:', err)
+  }
+}
+
+// 고른 파일 뭉치를 이미지와 그 밖의 파일로 가른다.
+// 확장자가 이미지면 이미지 쪽으로 보낸다 — 사람이 스크린샷을 파일 칸에 떨어뜨렸다고
+// "이미지는 안 됩니다" 라고 답하는 것은 도움이 되지 않는다.
+const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif', 'heic', 'heif']
+
+export function isImageFile(file) {
+  if (file?.type?.startsWith('image/')) return true
+  return IMAGE_EXTS.includes(extOfName(file?.name))
+}
+
+export function splitByKind(files) {
+  const images = []
+  const docs = []
+  for (const f of [...(files ?? [])]) (isImageFile(f) ? images : docs).push(f)
+  return { images, docs }
+}
+
+// 붙여넣기·드롭에서 이미지 파일만 골라낸다.
+// 모달의 드롭은 이미지와 파일을 함께 받아 splitByKind 로 가르므로 이것을 쓰지 않는다.
+// 목록 화면의 '빠른 저장'(Archive)은 이미지만 받으므로 그대로 쓴다.
 export function imageFilesFromPaste(e) {
   const items = e.clipboardData?.items ?? []
   const files = []

@@ -41,6 +41,34 @@ setup.sql 이 하는 일:
 
 ## 2. 아직 필요한 DB 변경
 
+### 🔴 파일 첨부 (file-attach) — **실행 필요**
+
+`supabase/setup.sql` 전체를 SQL Editor 에 다시 붙여넣고 Run 하세요.
+여러 번 실행해도 안전하게 만들어 두었으므로, 따로 떼어낸 조각을 실행하지 않아도 됩니다.
+이번에 늘어난 것은 두 가지입니다.
+
+```sql
+-- ① items 에 첨부 파일 메타 열 (실체는 스토리지에, 여기에는 이름·경로·용량만)
+alter table public.items add column if not exists files jsonb not null default '[]'::jsonb;
+
+-- ② 비공개 파일 버킷 + 정책 3개 (읽기·업로드·삭제)
+insert into storage.buckets (id, name, public, file_size_limit)
+values ('archive-files', 'archive-files', false, 10485760)
+on conflict (id) do nothing;
+-- 정책 본문은 setup.sql 의 '6) 파일 스토리지' 절에 있습니다.
+```
+
+**실행 전에는** 파일 첨부가 든 항목을 저장할 때 `files` 열을 찾지 못합니다.
+앱은 그 오류를 알아보고 `files` 없이 한 번 더 저장한 뒤,
+"첨부 파일 기능을 쓰려면 supabase/setup.sql 을 실행해 주세요" 라고 알립니다.
+즉 **기존 저장 기능이 멈추지는 않지만, 첨부한 파일은 항목에 붙지 않습니다.**
+
+버킷을 비공개로 둔 이유는 `supabase/setup.sql` 의 6) 절 주석에 적어 두었습니다.
+
+---
+
+### 그 밖
+
 **없습니다.**
 
 밤샘 작업(PWA · 모바일 · 다크 모드 · 에러 처리 · 성능 · 코드 정리 · 디자인 폴리싱 ·

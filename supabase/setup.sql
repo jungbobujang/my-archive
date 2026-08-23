@@ -16,8 +16,9 @@
 --   4) item_categories  항목 <-> 카테고리 다대다
 --   5) RLS 정책 (본인 데이터만)
 --   6) 이미지 스토리지 버킷 archive-images
---   7) updated_at 자동 갱신
---   8) 신규 가입자 기본 카테고리 4종 + 시간대 5종 자동 생성
+--   7) 파일 스토리지 버킷 archive-files (비공개)
+--   8) updated_at 자동 갱신
+--   9) 신규 가입자 기본 카테고리 4종 + 시간대 5종 자동 생성
 -- ============================================================
 
 
@@ -100,6 +101,11 @@ create table if not exists public.items (
   link_url text,
   image_url text,
 
+  -- 일반 파일 첨부의 메타만 담는다: [{ "path": "...", "name": "...", "size": 0 }]
+  -- 파일 실체는 storage 의 archive-files 버킷에 있다. 표를 나누지 않은 이유는
+  -- src/supabase.js 의 '일반 파일 첨부' 주석에 적어 두었다.
+  files jsonb not null default '[]'::jsonb,
+
   -- 휴지통(soft delete). null 이면 살아 있는 항목.
   deleted_at timestamptz,
 
@@ -117,6 +123,7 @@ alter table public.items add column if not exists slot_id uuid
   references public.time_slots(id) on delete set null;
 alter table public.items add column if not exists link_url text;
 alter table public.items add column if not exists deleted_at timestamptz;
+alter table public.items add column if not exists files jsonb not null default '[]'::jsonb;
 
 -- v1.0 에서 category 가 not null 이었다. 코드가 값을 넣지 않으므로 제약을 푼다.
 alter table public.items alter column category drop not null;
@@ -204,7 +211,38 @@ create policy "archive images delete" on storage.objects
 
 
 -- ============================================================
--- 6) updated_at 자동 갱신
+-- 6) 파일 스토리지 (비공개 — 올린 사람만 읽고 지운다)
+--
+--    이미지 버킷과 달리 public 이 아니다. 앱은 받을 때마다
+--    createSignedUrl 로 짧은 주소를 만들어 쓴다(src/supabase.js signedFileUrl).
+--    경로는 {항목id}/{타임스탬프}_{원본명} 이라 사용자 id 가 들어가지 않는다.
+--    그래서 소유자(owner) 기준으로 막는다.
+-- ============================================================
+insert into storage.buckets (id, name, public, file_size_limit)
+values ('archive-files', 'archive-files', false, 10485760)
+on conflict (id) do nothing;
+
+drop policy if exists "archive files read" on storage.objects;
+create policy "archive files read" on storage.objects
+  for select using (
+    bucket_id = 'archive-files' and auth.uid() = owner
+  );
+
+drop policy if exists "archive files upload" on storage.objects;
+create policy "archive files upload" on storage.objects
+  for insert with check (
+    bucket_id = 'archive-files' and auth.role() = 'authenticated'
+  );
+
+drop policy if exists "archive files delete" on storage.objects;
+create policy "archive files delete" on storage.objects
+  for delete using (
+    bucket_id = 'archive-files' and auth.uid() = owner
+  );
+
+
+-- ============================================================
+-- 7) updated_at 자동 갱신
 -- ============================================================
 create or replace function public.touch_updated_at()
 returns trigger as $$
@@ -220,7 +258,7 @@ create trigger items_touch before update on public.items
 
 
 -- ============================================================
--- 7) 기본 카테고리 4종 + 시간대 5종
+-- 8) 기본 카테고리 4종 + 시간대 5종
 --
 --    security definer 라 RLS 를 우회한다. 시드를 넣는 시점에는
 --    auth.uid() 가 비어 있기 때문이다(SQL Editor 실행, 가입 트리거 모두).

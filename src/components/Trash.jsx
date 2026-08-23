@@ -1,6 +1,8 @@
 // 휴지통. items.deleted_at 이 채워진 행만 모아 복원하거나 영구 삭제한다.
 import { useCallback, useEffect, useState } from 'react'
-import { supabase } from '../supabase.js'
+import {
+  supabase, filePathsOf, parseImages, removeStorageFiles, removeStorageImages
+} from '../supabase.js'
 import { useEscapeKey } from '../hooks.js'
 import { SkeletonRows } from './Skeleton.jsx'
 
@@ -45,13 +47,19 @@ export default function Trash({ onClose, onChanged }) {
     setRows((prev) => prev.filter((r) => r.id !== item.id))
   }
 
+  // 첨부 파일도 이미지도 스토리지에 있어 cascade 가 닿지 않는다. 행을 먼저 지우고 지운다 —
+  // 순서를 뒤집으면 행 삭제가 실패했을 때 항목만 남고 첨부가 사라진다.
+  // 지우기가 실패해도 삭제 자체는 끝난 것으로 다룬다(remove* 가 삼킨다).
+  // 유튜브 썸네일처럼 우리 버킷 밖의 주소는 removeStorageImages 가 알아서 거른다.
   async function purge(item) {
     if (!window.confirm('영구 삭제할까요? 이 항목은 되돌릴 수 없습니다.')) return
     setBusy(true)
     // item_categories 는 on delete cascade 로 함께 지워진다
     const { error: err } = await supabase.from('items').delete().eq('id', item.id)
+    if (err) { setBusy(false); setError('삭제에 실패했어요.'); return }
+    await removeStorageFiles(filePathsOf(item))
+    await removeStorageImages(parseImages(item.image_url))
     setBusy(false)
-    if (err) { setError('삭제에 실패했어요.'); return }
     setRows((prev) => prev.filter((r) => r.id !== item.id))
   }
 
@@ -59,10 +67,14 @@ export default function Trash({ onClose, onChanged }) {
     if (rows.length === 0) return
     if (!window.confirm(`휴지통의 ${rows.length}개 항목을 모두 영구 삭제할까요? 되돌릴 수 없습니다.`)) return
     setBusy(true)
+    const paths = rows.flatMap(filePathsOf)
+    const urls = rows.flatMap((r) => parseImages(r.image_url))
     const { error: err } = await supabase
       .from('items').delete().not('deleted_at', 'is', null)
+    if (err) { setBusy(false); setError('비우기에 실패했어요.'); return }
+    await removeStorageFiles(paths)
+    await removeStorageImages(urls)
     setBusy(false)
-    if (err) { setError('비우기에 실패했어요.'); return }
     setRows([])
   }
 
