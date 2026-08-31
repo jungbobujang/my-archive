@@ -29,6 +29,20 @@ function shortenUrl(url) {
   }
 }
 
+// 본문에서 제목으로 쓸 조각 — '첫 번째 비어 있지 않은 줄' 의 앞 20자.
+// 글 전체를 trim 해서 앞 20자를 떼면 두 가지가 걸린다.
+//   · 빈 줄로 시작하는 글은 첫 줄이 통째로 공백이라 제목이 엉뚱한 데서 시작한다.
+//   · 첫 줄이 짧으면 20자가 줄바꿈을 넘어가 제목 한가운데에 개행이 박힌다.
+// 줄 단위로 훑으면 둘 다 없다. 쓸 줄이 하나도 없으면 빈 문자열을 돌려주고,
+// 부르는 쪽이 다음 후보로 넘어간다.
+function titleFromBody(text) {
+  for (const line of String(text ?? '').split('\n')) {
+    const one = line.trim()
+    if (one) return one.slice(0, 20).trim()
+  }
+  return ''
+}
+
 // setup.sql 을 아직 실행하지 않아 items.files 열이 없는 DB 인지.
 // PostgREST 는 스키마 캐시에서 못 찾으면 PGRST204, 실제 SQL 오류면 42703 을 준다.
 function isMissingFilesColumn(err) {
@@ -390,17 +404,18 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
 
   // 제목이 비었을 때 대신 지어 준다.
   //   ① 링크가 있으면 첫 링크의 제목 (noembed)
-  //   ② 내용이 있으면 앞 20자
+  //   ② 내용이 있으면 첫 번째 비어 있지 않은 줄의 앞 20자
   //   ③ 이미지만 있으면 '이미지 YYYY-MM-DD'
   // ②를 ③보다 앞에 둔 이유: 글과 이미지가 함께 있을 때 날짜보다 글 첫머리가 훨씬 잘 읽힌다.
   // 첨부 파일 이름은 쓰지 않는다 — 사양에 없다.
+  // ②가 빈 값이면(공백·빈 줄뿐인 글) 거기서 멈추지 않고 ③으로 넘어간다.
   async function makeTitle(firstLink) {
     if (firstLink) {
       const fetched = await fetchLinkTitle(firstLink)
       if (fetched) return fetched
     }
-    const body = content.trim()
-    if (body) return body.slice(0, 20)
+    const body = titleFromBody(content)
+    if (body) return body
     if (images.length > 0) return `이미지 ${ymd(new Date())}`
     return firstLink || `메모 ${ymd(new Date())}`
   }
@@ -416,10 +431,19 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     return run(rest)
   }
 
+  // 저장 직전 최종 방어. 어떤 길로 들어와도 빈 제목이 DB 에 닿지 않게 한다.
+  // makeTitle 이 후보를 다 훑고도 빈 값을 낼 일은 이제 없지만, 제목은 목록에서
+  // 항목을 알아보는 유일한 글자라 한 번 비면 그 줄을 다시 찾을 길이 없다.
+  // 앞뒤 공백도 여기서 턴다 — 목록에서 들쭉날쭉해 보인다.
+  function withSafeTitle(payload) {
+    const clean = String(payload.title ?? '').trim()
+    return { ...payload, title: clean || `메모 ${ymd(new Date())}` }
+  }
+
   // 한 건 저장 + 소속 연결. 여러 건을 만들 때도 이 함수를 돌려 쓴다.
   async function insertOne(payload) {
     const { data: saved, error: dbErr } = await runWithFilesFallback(
-      (p) => supabase.from('items').insert(p).select().single(),
+      (p) => supabase.from('items').insert(withSafeTitle(p)).select().single(),
       payload
     )
     if (dbErr) throw dbErr
@@ -541,7 +565,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
 
       if (isEdit) {
         const { data: saved, error: dbErr } = await runWithFilesFallback(
-          (p) => supabase.from('items').update(p).eq('id', item.id).select().single(),
+          (p) => supabase.from('items').update(withSafeTitle(p)).eq('id', item.id).select().single(),
           payload
         )
         if (dbErr) throw dbErr

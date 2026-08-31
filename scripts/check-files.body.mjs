@@ -460,6 +460,93 @@ const imagesBucket = () => store.buckets['archive-images']
     imagePathFromUrl('https://x.co/storage/v1/object/public/archive-images/u1/%EA%B0%80.png') === 'u1/가.png')
 }
 
+// ── 16. 제목 없이 글만 있는 항목 ────────────────────────────
+// 제목을 비운 채 저장하면 본문에서 제목을 지어 준다. 그 본문이 빈 줄이나 공백으로
+// 시작해도 제목이 비면 안 된다 — 목록에서 그 줄을 다시 알아볼 길이 없어진다.
+{
+  const setText = (el, v) => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+    setter.call(el, v)
+    el.dispatchEvent(new window.Event('input', { bubbles: true }))
+  }
+  const 날짜꼴 = /^메모 \d{4}-\d{2}-\d{2}$/
+
+  // 본문만 넣고 저장한 뒤 저장된 행을 돌려준다
+  async function saveWithBody(body, attachFile = null) {
+    resetStore()
+    window.sessionStorage.clear()
+    const { host, root } = mount(React.createElement(ItemModal, {
+      item: null, categories: [], slots: [], userId: 'u1',
+      onClose: () => {}, onSaved: () => {}
+    }))
+    await act(async () => { setText(q(host, 'textarea'), body) })
+    if (attachFile) await attach(host, [attachFile])
+    const disabled = !!q(host, '.btn-primary')?.disabled
+    await act(async () => { click(q(host, '.btn-primary')) })
+    const row = store.rows.items[0] ?? null
+    act(() => { root.unmount() })
+    return { row, disabled }
+  }
+
+  // ① 빈 줄 두 개로 시작하는 본문
+  {
+    const { row } = await saveWithBody('\n\n텍스트가 여기서 시작합니다\n둘째 줄')
+    check('빈 줄로 시작: 저장된다', !!row, row?.title)
+    check('빈 줄로 시작: 제목이 비지 않는다', (row?.title ?? '').trim().length > 0, JSON.stringify(row?.title))
+    check('빈 줄로 시작: 첫 글자부터 제목', row?.title === '텍스트가 여기서 시작합니다', row?.title)
+    check('빈 줄로 시작: 제목에 개행이 없다', !(row?.title ?? '').includes('\n'), JSON.stringify(row?.title))
+    check('빈 줄로 시작: 본문은 원문 그대로', row?.content === '\n\n텍스트가 여기서 시작합니다\n둘째 줄')
+  }
+
+  // ② 공백·탭이 앞에 붙은 본문. 첫 줄이 짧아 20자가 줄바꿈을 넘어가는 경우이기도 하다.
+  {
+    const { row } = await saveWithBody('   \t 들여쓴 첫 줄\n다음 줄은 제목에 들어오면 안 된다')
+    check('공백으로 시작: 저장된다', !!row, row?.title)
+    check('공백으로 시작: 제목이 비지 않는다', (row?.title ?? '').trim().length > 0, JSON.stringify(row?.title))
+    check('공백으로 시작: 앞 공백이 떨어진다', row?.title === '들여쓴 첫 줄', JSON.stringify(row?.title))
+    check('공백으로 시작: 다음 줄을 끌어오지 않는다', !(row?.title ?? '').includes('다음 줄'), row?.title)
+  }
+
+  // ③ 본문이 통째로 공백. 이것만으로는 저장 자체가 막히는 것이 사양이라(제목·링크·내용·
+  //    이미지·파일 중 하나는 있어야 한다), 파일을 하나 붙여 저장이 되는 상태로 만든 뒤
+  //    제목이 다음 후보로 넘어가는지 본다.
+  {
+    // 담긴 게 하나도 없으면 저장 버튼 자체가 눌리지 않는다(handleSave 의 같은 검사는 예비다)
+    const { row, disabled } = await saveWithBody('   \n\n \t \n  ')
+    check('공백뿐: 저장 버튼이 잠긴다', disabled, disabled)
+    check('공백뿐: 저장되지 않는다', row === null, JSON.stringify(row?.title))
+  }
+  {
+    const { row } = await saveWithBody('   \n\n \t \n  ', realFile('붙임.pdf', 10))
+    check('공백뿐 + 파일: 저장된다', !!row, row?.title)
+    check('공백뿐 + 파일: 제목이 비지 않는다', (row?.title ?? '').trim().length > 0, JSON.stringify(row?.title))
+    check('공백뿐 + 파일: 메모 날짜로 넘어간다', 날짜꼴.test(row?.title ?? ''), JSON.stringify(row?.title))
+  }
+
+  // ④ 제목 칸에 공백만 쳐 둔 경우도 그 공백이 제목이 되면 안 된다
+  {
+    resetStore()
+    window.sessionStorage.clear()
+    const { host, root } = mount(React.createElement(ItemModal, {
+      item: null, categories: [], slots: [], userId: 'u1',
+      onClose: () => {}, onSaved: () => {}
+    }))
+    const titleInput = q(host, '.field input') // 모달에서 첫 번째로 나오는 입력칸이 제목이다
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    await act(async () => {
+      setter.call(titleInput, '   ')
+      titleInput.dispatchEvent(new window.Event('input', { bubbles: true }))
+    })
+    await act(async () => { setText(q(host, 'textarea'), '\n  본문 첫 줄') })
+    await act(async () => { click(q(host, '.btn-primary')) })
+    const row = store.rows.items[0]
+    check('제목 칸이 공백뿐: 본문에서 지어 준다', row?.title === '본문 첫 줄', JSON.stringify(row?.title))
+    act(() => { root.unmount() })
+  }
+
+  resetStore()
+}
+
 // ── 요약 ────────────────────────────────────────────────────
 let bad = 0
 for (const c of checks) {
