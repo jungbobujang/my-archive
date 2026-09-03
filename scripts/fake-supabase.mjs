@@ -10,6 +10,11 @@ export const store = {
   rows: {},
   // 다음 items insert/update 를 'files 열이 없다' 로 실패시킨다 (setup.sql 미실행 흉내)
   missingFilesColumn: false,
+  // items 에 쓰려고 하면 이 오류를 돌려준다. 로그인이 풀린 상태(RLS 거부)나
+  // NUL 거부(22P05)처럼 '저장 자체가 튕기는' 경우를 흉내 낼 때 쓴다.
+  // 오류 객체를 그대로 두면 모든 쓰기가 실패하고, 함수를 두면 (행) => 오류|null 로
+  // 어떤 행만 튕길지 고를 수 있다 (링크 분리 모드에서 한 건만 실패시킬 때 쓴다).
+  itemsError: null,
   // 업로드를 거부할 경로 조건. (path) => 오류 메시지 | null
   uploadGuard: null,
   calls: { upload: [], remove: [], signed: [] }
@@ -19,6 +24,7 @@ export function resetStore() {
   store.buckets = { 'archive-images': new Map(), 'archive-files': new Map() }
   store.rows = { items: [], item_categories: [], categories: [], time_slots: [] }
   store.missingFilesColumn = false
+  store.itemsError = null
   store.uploadGuard = null
   store.calls = { upload: [], remove: [], signed: [] }
 }
@@ -100,6 +106,16 @@ function makeQuery(table) {
 
 function run(table, q) {
   const rows = (store.rows[table] ??= [])
+
+  // 쓰기(insert/update)만 튕긴다. 조회까지 막으면 모달을 띄우는 것부터 실패해서
+  // '저장할 때 무엇이 보이는지' 를 볼 수 없다.
+  if (store.itemsError && table === 'items' && (q._op === 'insert' || q._op === 'update')) {
+    const list = Array.isArray(q._payload) ? q._payload : [q._payload]
+    const err = typeof store.itemsError === 'function'
+      ? list.map((r) => store.itemsError(r, q._op)).find(Boolean)
+      : store.itemsError
+    if (err) return { data: null, error: err }
+  }
 
   if (q._op === 'insert') {
     const list = Array.isArray(q._payload) ? q._payload : [q._payload]

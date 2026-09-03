@@ -1,6 +1,6 @@
 // scripts/check-modals.mjs 가 esbuild 로 묶어 실행한다. 직접 node 로 돌리면 JSX 때문에 실패한다.
 import { JSDOM } from 'jsdom'
-import { parseLinks } from '../src/supabase.js'
+import { parseLinks, DRAFT_DEBOUNCE_MS } from '../src/supabase.js'
 
 const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: 'http://localhost/', pretendToBeVisual: true })
 const { window } = dom
@@ -100,6 +100,9 @@ act(() => { blur(linkInput()) })
 check('포커스가 빠지면 목록으로 들어간다', rows().length === 4, rows().length)
 
 // ⑥ 임시본이 sessionStorage 에 쌓인다
+// 초안은 '입력이 멈춘 뒤' 에 쓴다(디바운스). 그래서 여기서 한 박자 기다린다 —
+// 링크가 늘면 효과가 한 번 더 도므로 넉넉히 두 박자를 준다.
+await act(async () => { await new Promise((r) => setTimeout(r, DRAFT_DEBOUNCE_MS * 2 + 200)) })
 const draft = JSON.parse(window.sessionStorage.getItem('ma:draft:new') || 'null')
 check('임시본 저장됨', !!draft)
 check('임시본에 링크 4개', draft && draft.links.length === 4, draft && draft.links.length)

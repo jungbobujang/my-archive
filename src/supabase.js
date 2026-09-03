@@ -453,3 +453,107 @@ export function parseTags(text) {
 export function ymd(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
+
+// ---------- 보이지 않는 문자 ----------
+//
+// 눈에는 안 보이지만 저장을 통째로 깨뜨리는 문자들이 있다.
+//   · NUL 문자 — Postgres 의 text 는 이것을 담지 못한다. 22P05 로 튕긴다.
+//   · 짝 없는 서로게이트 — 붙여넣기나 잘린 복사로 생긴다. JSON 인코딩부터 깨진다.
+//   · 그 밖의 제어문자 — 화면에는 아무것도 아닌데 글자 수만 늘린다.
+// 탭(\t)과 줄바꿈(\n·\r)은 사람이 일부러 넣은 서식이라 남긴다.
+//
+// 몇 개를 털었는지 함께 돌려준다 — 사람에게 "정리했습니다" 라고 알려야, 저장된 글이
+// 붙여넣은 것과 다르다는 사실을 나중에 혼자 발견하지 않는다.
+const RISKY = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\uD800-\uDFFF]/
+
+function isControlCode(c) {
+  return (c <= 0x08) || c === 0x0b || c === 0x0c || (c >= 0x0e && c <= 0x1f) || (c >= 0x7f && c <= 0x9f)
+}
+
+export function stripInvisible(text) {
+  const src = String(text ?? '')
+  // 대부분의 글에는 하나도 없다. 한 번 훑어 없으면 원본을 그대로 돌려준다 (긴 글에서 값싸다).
+  if (!RISKY.test(src)) return { text: src, removed: 0 }
+
+  let out = ''
+  let removed = 0
+  for (let i = 0; i < src.length; i++) {
+    const c = src.charCodeAt(i)
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = src.charCodeAt(i + 1)
+      if (next >= 0xdc00 && next <= 0xdfff) { out += src[i] + src[i + 1]; i++; continue }
+      removed++ // 짝 없는 상위 서로게이트
+      continue
+    }
+    if (c >= 0xdc00 && c <= 0xdfff) { removed++; continue } // 짝 없는 하위 서로게이트
+    if (isControlCode(c)) { removed++; continue }
+    out += src[i]
+  }
+  return { text: out, removed }
+}
+
+// 저장에 쓸 값 여럿을 한 번에 턴다. { values, removed } 로 돌려준다 —
+// 안내 문구는 "3개를 정리했습니다" 처럼 칸을 가리지 않고 합쳐서 말한다.
+export function stripInvisibleAll(map) {
+  const values = {}
+  let removed = 0
+  for (const [k, v] of Object.entries(map ?? {})) {
+    const one = stripInvisible(v)
+    values[k] = one.text
+    removed += one.removed
+  }
+  return { values, removed }
+}
+
+export function byteLength(text) {
+  return new TextEncoder().encode(String(text ?? '')).length
+}
+
+// ---------- 저장 실패 문구 ----------
+//
+// 저장이 실패했을 때 "네트워크와 Supabase 설정을 확인해 주세요" 한 줄만 띄우면,
+// 실제로는 로그인이 풀린 것이어도 사람은 와이파이를 쳐다본다. 원인마다 다음에 할 일이
+// 다르므로 문구도 달라야 한다. 알아보지 못한 오류는 코드와 원문을 그대로 붙여 준다 —
+// 포괄 문구는 코드도 메시지도 없을 때의 최후 폴백으로만 쓴다.
+export const SAVE_FALLBACK_MESSAGE = '저장에 실패했어요. 네트워크와 Supabase 설정을 확인해 주세요.'
+export const SESSION_EXPIRED_MESSAGE = '로그인이 만료됐습니다. 다시 로그인하면 작성 내용은 유지됩니다'
+
+export function saveErrorMessage(err) {
+  const code = String(err?.code ?? err?.status ?? '')
+  const msg = String(err?.message ?? '')
+
+  // 세션 만료·권한(RLS). 로그인하지 않은 채로 저장해도 여기로 온다.
+  if (code === '401' || code === '403' || code === '42501' || code === 'PGRST301' ||
+      /jwt|row-level security|not authenticated|permission denied/i.test(msg)) {
+    return SESSION_EXPIRED_MESSAGE
+  }
+  // NUL 등 Postgres 가 담지 못하는 문자 (정리를 거치고도 남았을 때)
+  if (code === '22P05' || /untranslatable|0x00/i.test(msg)) {
+    return '저장할 수 없는 보이지 않는 문자가 남아 있어요. 내용을 다시 붙여넣어 주세요'
+  }
+  // 제목이 빈 채로 DB 에 닿았을 때 (열 제약)
+  if ((code === '23502' || code === '23514') && /title|제목/i.test(msg)) {
+    return '제목이 비어 저장하지 못했어요. 제목을 한 줄 적어 주세요'
+  }
+  if (code === '23502') {
+    return `${msg.match(/column "([^"]+)"/)?.[1] ?? '어떤 값'} 이(가) 비어 저장하지 못했어요`
+  }
+  if (code === '23503') return '연결된 카테고리나 시간대가 이미 지워졌어요. 다시 골라 주세요'
+  if (code === '23505') return '같은 항목이 이미 저장돼 있어요'
+  if (code === '22001') return '글이 너무 길어 저장하지 못했어요. 조금 나눠서 저장해 주세요'
+  if (code === '42P01' || code === 'PGRST205') {
+    return 'DB 표를 찾지 못했어요 — supabase/setup.sql 을 실행해 주세요'
+  }
+  if (code === 'PGRST204' || code === '42703') {
+    return `DB 에 없는 열이에요 — supabase/setup.sql 을 실행해 주세요 (${code})`
+  }
+  if (/failed to fetch|networkerror|fetch failed|load failed/i.test(msg)) {
+    return '서버에 닿지 못했어요. 연결 상태를 확인해 주세요'
+  }
+  if (msg) return `저장하지 못했어요: ${msg}${code ? ` (${code})` : ''}`
+  return SAVE_FALLBACK_MESSAGE
+}
+
+// 초안(임시 보존) 조절값. 모달과 점검 스크립트가 같은 값을 본다.
+export const DRAFT_DEBOUNCE_MS = 500
+export const DRAFT_MAX_BYTES = 1024 * 1024

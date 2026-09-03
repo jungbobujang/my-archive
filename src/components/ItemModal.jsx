@@ -11,9 +11,11 @@ import {
   parseImages, joinImages, uploadImage, imageFilesFromPaste, MAX_IMAGES,
   parseFiles, joinFiles, uploadFile, signedFileUrl, fileRejectReason, fileIcon, formatBytes,
   removeStorageFiles, removeStorageImages, splitByKind, MAX_FILES, FILE_EXTS,
-  treeOrder, categoryPath
+  treeOrder, categoryPath,
+  stripInvisibleAll, saveErrorMessage, byteLength, DRAFT_DEBOUNCE_MS, DRAFT_MAX_BYTES
 } from '../supabase.js'
 import { useEscapeKey, confirmDiscard, draftKeyFor, readDraft, writeDraft, clearDraft } from '../hooks.js'
+import { useOptionalToast } from './Toast.jsx'
 
 // youtu.be/abc123 형태로 줄인다.
 // 물음표 뒤(?v=...)까지 남기는 이유: 유튜브 링크는 경로가 전부 /watch 라
@@ -55,6 +57,9 @@ const FILE_ACCEPT = FILE_EXTS.map((e) => `.${e}`).join(',')
 
 export default function ItemModal({ item, categories, slots, userId, onClose, onSaved }) {
   const isEdit = !!item
+  // 저장 실패는 모달 안의 한 줄(.form-error)만으로는 놓치기 쉽다 — 저장에 성공하면 모달이
+  // 닫히고, 실패해도 긴 폼에서는 그 줄이 화면 밖에 있을 수 있다. 그래서 토스트도 함께 띄운다.
+  const toast = useOptionalToast()
 
   // 이 항목의 임시본. 렌더 중 한 번만 읽는다 (이후 값은 state 가 들고 있다).
   const draftKey = draftKeyFor(item?.id)
@@ -124,6 +129,13 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     item?.category_id ? [item.category_id] : []
   )
   const [progress, setProgress] = useState(null) // { done, total }
+  // 본문이 너무 커서 이번 초안을 건너뛰었는지 (화면에 한 줄로 알린다)
+  const [draftSkipped, setDraftSkipped] = useState(false)
+
+  // 본문에서 한 번이라도 링크 목록에 얹어 본 URL. 사람이 ✕ 로 뺀 링크를 저장할 때
+  // 본문을 다시 훑어 되살리지 않기 위한 기억이다. 처음 값은 열었을 때의 본문 —
+  // 그 안의 URL 은 이미 링크 목록에 있거나, 예전에 일부러 뺀 것이다.
+  const offeredUrls = useRef(new Set(extractUrls(draft?.content ?? item?.content ?? '')))
 
   // 입력칸에 쳐 두고 '추가' 를 안 누른 링크도 저장 때는 함께 담는다 (쓴 것을 잃지 않게).
   const pendingLinks = useMemo(
@@ -172,9 +184,38 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   }
 
   // 작성 중인 값을 sessionStorage 에 남긴다. 바뀐 게 없으면 남길 것도 없다.
+  //
+  // 글자마다 쓰지 않고 '입력이 멈춘 뒤 500ms' 에 한 번만 쓴다. 예전에는 키를 누를 때마다
+  // 본문 전체를 JSON 으로 굳혀 sessionStorage 에 넣고, 같은 박자로 본문에서 URL 도 훑었다.
+  // 짧은 메모에서는 티가 안 나지만 대본처럼 긴 글에서는 타이핑이 눈에 띄게 밀린다
+  // (50만 자에서 한 글자마다 1MB 를 직렬화하는 셈이다).
+  //
+  // 본문이 1MB 를 넘으면 임시 보존을 건너뛴다. sessionStorage 는 탭당 몇 MB 뿐이라
+  // 그 크기를 계속 밀어 넣으면 쓰기가 실패하거나 다른 초안까지 밀어낸다. 대신 그 사실을
+  // 모달 안에 한 줄로 알린다 — 조용히 안 하면 '되살려 주겠지' 하고 믿게 된다.
   useEffect(() => {
-    if (!dirty) { clearDraft(draftKey); return }
-    writeDraft(draftKey, draftBody(images))
+    if (!dirty) { clearDraft(draftKey); setDraftSkipped(false); return }
+    const timer = setTimeout(() => {
+      // 본문에 붙여넣은 URL 을 링크 목록으로 옮기는 것도 여기서 한다.
+      // (링크가 늘면 이 효과가 한 번 더 돌고, 그때 초안이 새 링크까지 담아 저장된다)
+      // 한 번 얹어 본 URL 은 다시 얹지 않는다 — ✕ 로 뺀 링크가 계속 되살아나면 뺄 방법이 없다.
+      const fromBody = extractUrls(content).filter((u) => !offeredUrls.current.has(u))
+      if (fromBody.length > 0) {
+        for (const u of fromBody) offeredUrls.current.add(u)
+        setLinks((prev) => {
+          const have = new Set(prev)
+          const fresh = fromBody.filter((u) => !have.has(u))
+          return fresh.length === 0 ? prev : [...prev, ...fresh]
+        })
+      }
+      if (byteLength(content) > DRAFT_MAX_BYTES) {
+        setDraftSkipped(true)
+        return
+      }
+      setDraftSkipped(false)
+      writeDraft(draftKey, draftBody(images))
+    }, DRAFT_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
   }, [draftKey, dirty, title, content, links, linkInput, tagsText, categoryIds, status, dueDate, slotId, images, splitMode])
 
   // 저장하지 않고 닫을 때: 이번에 올려 둔 이미지·파일을 스토리지에서 지운다.
@@ -295,6 +336,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     // 그러면 아직 올라가는 중인데 저장 버튼이 풀린다.
     setUploading((n) => n + take.length)
     let failed = 0
+    let lastErr = null
     for (const f of take) {
       try {
         const url = await uploadImage(f, userId)
@@ -304,12 +346,18 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
         ))
       } catch (err) {
         failed += 1
+        lastErr = err
         console.error('이미지 업로드 실패:', err)
       } finally {
         setUploading((n) => Math.max(0, n - 1))
       }
     }
-    if (failed > 0) setError(`이미지 ${failed}장을 올리지 못했어요. 연결 상태를 확인해 주세요.`)
+    if (failed > 0) {
+      // 올리기도 저장 경로다. 왜 안 됐는지(로그인 만료·용량·연결)를 그대로 전한다.
+      const message = `이미지 ${failed}장을 올리지 못했어요 — ${saveErrorMessage(lastErr)}`
+      setError(message)
+      toast.error(message)
+    }
   }
 
   // 파일 여러 개를 받아 순서대로 올린다. 거부 사유는 첫 건만 보여 준다 —
@@ -331,6 +379,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
 
     setFileBusy((n) => n + take.length)
     let failed = 0
+    let lastErr = null
     for (const f of take) {
       try {
         const meta = await uploadFile(f, folderId)
@@ -339,12 +388,17 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
         ))
       } catch (err) {
         failed += 1
+        lastErr = err
         console.error('파일 업로드 실패:', err)
       } finally {
         setFileBusy((n) => Math.max(0, n - 1))
       }
     }
-    if (failed > 0) setError(`파일 ${failed}개를 올리지 못했어요. 연결 상태를 확인해 주세요.`)
+    if (failed > 0) {
+      const message = `파일 ${failed}개를 올리지 못했어요 — ${saveErrorMessage(lastErr)}`
+      setError(message)
+      toast.error(message)
+    }
   }
 
   // 떨어뜨린 것을 이미지와 파일로 갈라 각자에게 보낸다. 어느 칸에 떨어뜨렸든 같다 —
@@ -382,7 +436,9 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
       a.remove()
     } catch (err) {
       console.error('파일 내려받기 실패:', err)
-      setError('파일을 내려받지 못했어요. 잠시 뒤 다시 시도해 주세요.')
+      const message = `파일을 내려받지 못했어요 — ${saveErrorMessage(err)}`
+      setError(message)
+      toast.error(message)
     }
   }
 
@@ -409,12 +465,14 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   // ②를 ③보다 앞에 둔 이유: 글과 이미지가 함께 있을 때 날짜보다 글 첫머리가 훨씬 잘 읽힌다.
   // 첨부 파일 이름은 쓰지 않는다 — 사양에 없다.
   // ②가 빈 값이면(공백·빈 줄뿐인 글) 거기서 멈추지 않고 ③으로 넘어간다.
-  async function makeTitle(firstLink) {
+  // body 를 받는 이유: 저장 직전에 보이지 않는 문자를 턴 본문으로 제목을 지어야
+  // 화면의 글과 제목이 같아진다 (state 의 원본은 아직 그 문자를 물고 있다).
+  async function makeTitle(firstLink, bodyText = content) {
     if (firstLink) {
       const fetched = await fetchLinkTitle(firstLink)
       if (fetched) return fetched
     }
-    const body = titleFromBody(content)
+    const body = titleFromBody(bodyText)
     if (body) return body
     if (images.length > 0) return `이미지 ${ymd(new Date())}`
     return firstLink || `메모 ${ymd(new Date())}`
@@ -462,11 +520,12 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     if (linkErr) throw linkErr
   }
 
-  // 카테고리·태그·실행 상태는 어느 모드에서나 공통으로 붙는다
-  function commonFields() {
+  // 카테고리·태그·실행 상태는 어느 모드에서나 공통으로 붙는다.
+  // 태그 원문을 받는 것은 저장 직전에 턴 값을 쓰기 위해서다(handleSave 참고).
+  function commonFields(tagsSource = tagsText) {
     return {
       category_id: categoryIds[0] ?? null, // 하위호환용 단일 컬럼
-      tags: parseTags(tagsText),
+      tags: parseTags(tagsSource),
       status,
       // 할 것이 아니면 일정 정보는 남기지 않는다
       due_date: status === 'todo' ? (dueDate || null) : null,
@@ -491,6 +550,16 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
       : null
   }
 
+  // 저장 경로에서 난 실패는 전부 이 자리로 모은다. 원인마다 다른 문구를 만들고
+  // (saveErrorMessage), 모달 안 한 줄과 토스트에 같은 말을 띄운다.
+  function reportSaveError(err, prefix = '') {
+    const message = prefix + saveErrorMessage(err)
+    setError(message)
+    toast.error(message)
+    console.error('[저장 실패]', err)
+    return message
+  }
+
   async function handleSave() {
     if (uploading > 0) {
       setError('이미지를 올리는 중이에요. 끝나면 저장해 주세요.')
@@ -506,35 +575,60 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     }
     setBusy(true)
     setError('')
-    // 입력칸에 남아 있던 링크까지 포함해 이번 저장에 쓸 목록을 굳힌다
-    const finalLinks = allLinks
+
+    // 보이지 않는 문자는 저장 직전에 턴다 — 입력 중에 지우면 커서가 튄다.
+    // DB 에 닿는 것은 여기서 턴 값이고, 몇 개를 털었는지는 사람에게 알린다.
+    const { values: clean, removed } = stripInvisibleAll({ title, content, tagsText })
+    if (removed > 0) toast.info(`보이지 않는 문자 ${removed}개를 정리했습니다`)
+
+    // 입력칸에 남아 있던 링크 + 본문에 적었지만 아직 목록에 오르지 못한 링크까지 담는다.
+    // (초안 디바운스 때문에, 본문 URL 이 목록에 오르기 전에 저장을 누를 수 있다)
+    // 이미 한 번 얹어 봤던 URL 은 빼고 본다 — 사람이 ✕ 로 뺀 것을 되살리지 않기 위해서다.
+    const finalLinks = [...allLinks]
+    for (const u of extractUrls(clean.content)) {
+      if (!offeredUrls.current.has(u) && !finalLinks.includes(u)) finalLinks.push(u)
+    }
     try {
       // ── 링크마다 개별 항목 ─────────────────────────────────
       if (splitting) {
         let made = 0
+        const fails = []
         for (let i = 0; i < finalLinks.length; i++) {
           const url = finalLinks[i]
           setProgress({ done: i, total: finalLinks.length })
           try {
             const fetched = (await fetchLinkTitle(url)) || url
             await insertOne({
-              ...commonFields(),
+              ...commonFields(clean.tagsText),
               title: fetched,
               // 이미지와 내용은 첫 항목에만 (N개에 같은 것을 복사하면 잡음이 된다)
-              content: i === 0 ? content : '',
+              content: i === 0 ? clean.content : '',
               link_url: url,
               image_url: i === 0 && images.length > 0 ? joinImages(images) : youtubeThumb(url),
               files: i === 0 ? joinFiles(files) : []
             })
             made += 1
           } catch (err) {
-            console.error('저장 실패:', url, err) // 하나가 실패해도 나머지는 계속한다
+            // 하나가 실패해도 나머지는 계속한다. 다만 어느 링크가 왜 실패했는지는 남긴다 —
+            // 개수만 말하면 무엇을 다시 저장해야 하는지 알 수 없다.
+            fails.push({ url, why: saveErrorMessage(err) })
+            console.error('[저장 실패]', url, err)
           }
         }
         setProgress({ done: finalLinks.length, total: finalLinks.length })
-        if (made === 0) throw new Error('한 건도 저장하지 못했습니다')
-        if (made < finalLinks.length) {
-          setError(`${made}개 저장 (${finalLinks.length - made}개 실패)`)
+        if (made === 0) {
+          // 한 건도 못 만들었으면 첫 실패 이유가 곧 저장 실패 이유다 (모달은 열어 둔다)
+          const why = fails[0]?.why ?? '한 건도 저장하지 못했습니다'
+          setError(why)
+          toast.error(why)
+          return
+        }
+        if (fails.length > 0) {
+          const detail = fails.slice(0, 2).map((f) => `${shortenUrl(f.url)} — ${f.why}`).join(' / ')
+          const more = fails.length > 2 ? ` 외 ${fails.length - 2}건` : ''
+          const message = `${made}개 저장 (${fails.length}개 실패) · ${detail}${more}`
+          setError(message)
+          toast.error(message) // 모달이 닫히므로 실패한 링크는 토스트로 남는다
         }
         clearDraft(draftKey)
         await flushPendingRemoval()
@@ -552,12 +646,12 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
         if (thumb) finalImages = [thumb]
       }
 
-      const finalTitle = title.trim() || (await makeTitle(finalLinks[0] ?? null))
+      const finalTitle = clean.title.trim() || (await makeTitle(finalLinks[0] ?? null, clean.content))
 
       const payload = {
-        ...commonFields(),
+        ...commonFields(clean.tagsText),
         title: finalTitle,
-        content,
+        content: clean.content,
         link_url: cleanLink,
         image_url: joinImages(finalImages),
         files: joinFiles(files)
@@ -579,8 +673,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
 
       onSaved(sqlHint())
     } catch (err) {
-      setError('저장에 실패했어요. 네트워크와 Supabase 설정을 확인해 주세요.')
-      console.error(err)
+      reportSaveError(err)
     } finally {
       setBusy(false)
       setProgress(null)
@@ -597,7 +690,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
       .update({ deleted_at: new Date().toISOString() })
       .eq('id', item.id)
     if (err) {
-      setError('삭제에 실패했어요.')
+      reportSaveError(err, '삭제하지 못했어요 — ')
       setBusy(false)
       return
     }
@@ -834,19 +927,17 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
           내용
           <textarea
             value={content}
-            onChange={(e) => {
-              const next = e.target.value
-              setContent(next)
-              // 내용에 붙여넣은 URL 중 목록에 아직 없는 것만 링크 목록에 더한다
-              setLinks((prev) => {
-                const have = new Set(prev)
-                const fresh = extractUrls(next).filter((u) => !have.has(u))
-                return fresh.length === 0 ? prev : [...prev, ...fresh]
-              })
-            }}
+            onChange={(e) => setContent(e.target.value)}
             rows={8}
             placeholder="대본 전문, 아이디어 상세 등 길이 제한 없이 저장할 수 있어요"
           />
+          {/* URL 훑기는 초안과 같은 박자(입력이 멈춘 뒤)로 미뤘다 — 위 useEffect 참고 */}
+          {draftSkipped && (
+            <p className="field-note" role="status">
+              내용이 1MB 를 넘어 임시 보존을 건너뜁니다. 저장을 눌러 주세요
+              (창을 닫을 때는 한 번 더 시도합니다).
+            </p>
+          )}
         </label>
 
         <label className="field">

@@ -59,3 +59,12 @@ export function useToast() {
   if (!ctx) throw new Error('useToast 는 ToastProvider 안에서만 쓸 수 있어요')
   return ctx
 }
+
+// 모달처럼 Provider 없이도 홀로 뜰 수 있는 화면용. 없으면 조용히 아무것도 하지 않는다 —
+// 알림을 못 띄운다고 저장 자체가 멈추면 그게 더 큰 손해다.
+// (앱에서는 main.jsx 가 항상 감싸므로 실제로는 늘 진짜 토스트가 뜬다.)
+const NO_TOAST = { error: () => {}, success: () => {}, info: () => {} }
+
+export function useOptionalToast() {
+  return useContext(ToastContext) ?? NO_TOAST
+}

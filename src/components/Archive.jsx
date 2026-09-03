@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   supabase, PAGE_SIZE, subtreeIds, childrenOf, fetchAllRows,
   joinImages, uploadImage, imageFilesFromPaste, imageFilesFromDrop, ymd, MAX_IMAGES,
-  parseFiles, removeStorageImages
+  parseFiles, removeStorageImages, stripInvisible, saveErrorMessage
 } from '../supabase.js'
 import { useTheme } from '../theme.js'
 import { useToast } from './Toast.jsx'
@@ -299,8 +299,11 @@ export default function Archive({ session, onNavigate }) {
     const raw = quickText.trim()
     if (!raw || quickBusy) return
     const isTodo = raw.startsWith('!')
-    const title = (isTodo ? raw.slice(1) : raw).trim()
+    // 붙여넣은 한 줄에도 보이지 않는 문자가 섞여 들어온다(NUL 이 하나만 있어도 22P05 로 튕긴다).
+    const typed = stripInvisible((isTodo ? raw.slice(1) : raw).trim())
+    const title = typed.text.trim()
     if (!title) return
+    if (typed.removed > 0) toast.info(`보이지 않는 문자 ${typed.removed}개를 정리했습니다`)
     setQuickBusy(true)
     const { error } = await supabase.from('items').insert({
       title,
@@ -312,7 +315,7 @@ export default function Archive({ session, onNavigate }) {
     })
     setQuickBusy(false)
     if (error) {
-      toast.error('저장하지 못했어요. 연결 상태를 확인해 주세요')
+      toast.error(saveErrorMessage(error)) // 원인마다 다른 문구 (로그인 만료·NUL·연결)
       return
     }
     setQuickText('')
@@ -334,11 +337,13 @@ export default function Archive({ session, onNavigate }) {
     setQuickUpload(list.length)
     const urls = []
     let failed = 0
+    let lastErr = null
     for (const f of list) {
       try {
         urls.push(await uploadImage(f, session.user.id))
       } catch (err) {
         failed += 1
+        lastErr = err
         console.error('이미지 업로드 실패:', err)
       } finally {
         setQuickUpload((n) => Math.max(0, n - 1))
@@ -346,7 +351,7 @@ export default function Archive({ session, onNavigate }) {
     }
 
     if (urls.length === 0) {
-      toast.error('이미지를 올리지 못했어요. 연결 상태를 확인해 주세요')
+      toast.error(`이미지를 올리지 못했어요 — ${saveErrorMessage(lastErr)}`)
       return
     }
 
@@ -363,7 +368,7 @@ export default function Archive({ session, onNavigate }) {
       // 올리기는 됐는데 행이 안 들어간 경우다. 그대로 두면 아무 항목도 가리키지 않는
       // 이미지가 스토리지에 남는다 — 화면에는 보이지 않아 나중에 찾을 방법도 없다.
       await removeStorageImages(urls)
-      toast.error('저장하지 못했어요. 연결 상태를 확인해 주세요')
+      toast.error(saveErrorMessage(error)) // 원인마다 다른 문구 (로그인 만료·NUL·연결)
       return
     }
     setQuickText('')
