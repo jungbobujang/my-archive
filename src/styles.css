@@ -1835,3 +1835,82 @@ a.card-thumb { cursor: pointer; }
   /* 카드가 넓어졌으니 썸네일도 그에 맞게 */
   .item-grid .card-thumb img { height: 150px; }
 }
+
+/* ── 자리비움 잠금 ────────────────────────────────────────────
+   가림막은 반투명(--scrim)이 아니라 완전히 불투명한 --bg 다.
+   뒤가 비치면 가린 것이 아니다 — 애초에 Archive 가 본문을 그리지 않지만,
+   이 화면이 어디에 놓이든 뒤가 보이지 않도록 색부터 못박아 둔다. */
+.lock-screen {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  z-index: 200;           /* 모달(50)·토스트보다 위 */
+  overflow-y: auto;
+}
+.lock-box {
+  width: 100%;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+.lock-mark { font-size: 40px; line-height: 1; }
+.lock-title { margin: 4px 0 0; font-size: 20px; font-weight: 650; }
+.lock-sub { margin: 0; font-size: 13.5px; color: var(--ink-soft); }
+
+.lock-pin {
+  width: 100%;
+  margin-top: 6px;
+  padding: 14px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--ink);
+  /* 16px 미만이면 iOS 가 입력할 때 화면을 확대한다 */
+  font-size: 26px;
+  text-align: center;
+  letter-spacing: 0.5em;
+  text-indent: 0.5em;     /* letter-spacing 이 만든 오른쪽 여백만큼 되민다 */
+}
+.lock-pin:focus { border-color: var(--accent); outline: none; }
+.lock-pin-wrong { border-color: var(--danger); background: var(--danger-soft); }
+
+/* 비어 있을 때도 자리를 지켜, 틀렸을 때 아래 것들이 밀려 내려가지 않게 한다 */
+.lock-msg {
+  margin: 0;
+  min-height: 1.4em;
+  font-size: 12.5px;
+  color: var(--danger);
+  line-height: 1.4;
+}
+.lock-hint { margin: 10px 0 0; font-size: 12px; color: var(--ink-faint); line-height: 1.5; }
+
+.lock-btn { font-size: 15px; line-height: 1; }
+
+/* ── 설정 안의 잠금 칸 ───────────────────────────────────── */
+.lock-form { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.lock-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.lock-field span { font-size: 13.5px; }
+.lock-field input {
+  width: 108px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 16px;
+  text-align: center;
+  letter-spacing: 0.28em;
+  text-indent: 0.28em;
+}
+.lock-field input:focus { border-color: var(--accent); outline: none; }
+.lock-form-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.lock-toggle { justify-content: space-between; margin-bottom: 10px; cursor: pointer; }
+.lock-toggle span { display: flex; flex-direction: column; gap: 2px; font-size: 13.5px; }
+.lock-toggle input { width: 18px; height: 18px; flex: none; accent-color: var(--accent); }
+.set-error { margin: 0; font-size: 12.5px; color: var(--danger); }

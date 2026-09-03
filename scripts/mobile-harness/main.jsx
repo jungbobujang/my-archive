@@ -3,6 +3,7 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import ItemModal from '../../src/components/ItemModal.jsx'
+import LockScreen from '../../src/components/LockScreen.jsx'
 import '../../src/styles.css'
 
 const params = new URLSearchParams(location.search)
@@ -61,6 +62,21 @@ if (mode === 'multi') {
   }))
 }
 
+// 잠금 화면은 모달이 아니라 화면 전체를 덮는 것이라 따로 그린다.
+// 뒤에 글자를 한 무더기 깔아 두고 그린다 — 가림막이 정말 불투명한지,
+// 뒤엣것이 한 글자라도 비치는지를 스크린샷으로 보려는 것이다.
+if (mode === 'lock') {
+  const behind = document.createElement('div')
+  behind.className = 'archive'
+  behind.style.padding = '16px'
+  behind.textContent = '가려져야 할 내용 '.repeat(120)
+  document.body.insertBefore(behind, document.getElementById('root'))
+
+  createRoot(document.getElementById('root')).render(
+    <LockScreen userId="u1" onUnlock={() => {}} />
+  )
+} else {
+
 createRoot(document.getElementById('root')).render(
   <ItemModal
     item={item}
@@ -71,3 +87,5 @@ createRoot(document.getElementById('root')).render(
     onSaved={() => {}}
   />
 )
+
+}

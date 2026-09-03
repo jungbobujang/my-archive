@@ -7,8 +7,14 @@ import {
   supabase, fetchAllRows, totalFileBytes, formatBytes,
   STORAGE_QUOTA_BYTES, STORAGE_WARN_RATIO
 } from '../supabase.js'
+import {
+  PIN_LENGTH, IDLE_CHOICES, cryptoReady, isValidPin,
+  savePin, clearPin, readLockConfig, writeEnabled, writeIdleMinutes
+} from '../lock.js'
 
-export default function Settings({ email, themePref, onThemeChange, onOpenPricing, onClose }) {
+export default function Settings({
+  email, userId, themePref, onThemeChange, onOpenPricing, onLockChanged, onClose
+}) {
   useEscapeKey(onClose)
 
   // 첨부 파일이 차지한 용량. items.files 의 size 를 더한다 —
@@ -88,6 +94,8 @@ export default function Settings({ email, themePref, onThemeChange, onOpenPricin
           </section>
         )}
 
+        <LockSettings userId={userId} onChanged={onLockChanged} />
+
         <section className="set-section">
           <h3 className="set-head">플랜</h3>
           <div className="set-row">
@@ -109,5 +117,152 @@ export default function Settings({ email, themePref, onThemeChange, onOpenPricin
         </section>
       </div>
     </div>
+  )
+}
+
+// 자리비움 잠금 설정.
+//
+// PIN 은 이 기기에만 저장된다(계정이 아니라). 그래서 폰에서 건 PIN 이 컴퓨터에는 없고,
+// 기기마다 따로 걸어야 한다 — 잠금을 쓰고 싶은 기기가 보통 하나뿐이라 이 편이 낫다.
+// 자세한 이유는 src/lock.js 머리말에 적어 두었다.
+function LockSettings({ userId, onChanged }) {
+  const [cfg, setCfg] = useState(() => readLockConfig(userId))
+  const [mode, setMode] = useState('idle')   // idle | new (등록·변경 입력 중)
+  const [pin, setPin] = useState('')
+  const [pin2, setPin2] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  // 설정을 바꾸면 화면(잠금 감시)도 같이 다시 읽어야 한다.
+  function sync() {
+    setCfg(readLockConfig(userId))
+    onChanged?.()
+  }
+
+  function reset() {
+    setMode('idle'); setPin(''); setPin2(''); setError('')
+  }
+
+  const digits = (v) => v.replace(/\D/g, '').slice(0, PIN_LENGTH)
+
+  async function register(e) {
+    e.preventDefault()
+    if (busy) return
+    if (!isValidPin(pin)) { setError(`PIN 은 숫자 ${PIN_LENGTH}자리여야 해요`); return }
+    if (pin !== pin2) { setError('두 번 넣은 PIN 이 서로 달라요'); return }
+    setBusy(true)
+    try {
+      await savePin(userId, pin)
+      reset()
+      sync()
+    } catch (err) {
+      setError(err.message || 'PIN 을 저장하지 못했어요')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // 보안 컨텍스트가 아니면 PIN 을 안전하게 둘 수가 없다. 반쪽으로 열어 두지 않는다.
+  if (!cryptoReady()) {
+    return (
+      <section className="set-section">
+        <h3 className="set-head">자리비움 잠금</h3>
+        <p className="set-hint">
+          이 브라우저에서는 PIN 을 안전하게 저장할 수 없어 잠금을 쓸 수 없어요
+          (https 로 열면 됩니다).
+        </p>
+      </section>
+    )
+  }
+
+  return (
+    <section className="set-section">
+      <h3 className="set-head">자리비움 잠금</h3>
+
+      {!cfg.pinSet && mode === 'idle' && (
+        <>
+          <p className="set-hint">
+            PIN 을 걸어 두면 자리를 뜬 사이 화면을 가릴 수 있어요. 걸기 전에는 꺼져 있습니다.
+          </p>
+          <button className="btn-ghost btn-sm" onClick={() => setMode('new')}>PIN 등록</button>
+        </>
+      )}
+
+      {mode === 'new' && (
+        <form className="lock-form" onSubmit={register}>
+          <label className="lock-field">
+            <span>새 PIN ({PIN_LENGTH}자리)</span>
+            <input
+              type="password" inputMode="numeric" pattern="[0-9]*" autoComplete="off"
+              maxLength={PIN_LENGTH} value={pin}
+              onChange={(e) => { setPin(digits(e.target.value)); setError('') }}
+              aria-label="새 PIN"
+            />
+          </label>
+          <label className="lock-field">
+            <span>한 번 더</span>
+            <input
+              type="password" inputMode="numeric" pattern="[0-9]*" autoComplete="off"
+              maxLength={PIN_LENGTH} value={pin2}
+              onChange={(e) => { setPin2(digits(e.target.value)); setError('') }}
+              aria-label="새 PIN 확인"
+            />
+          </label>
+          {error && <p className="set-error">{error}</p>}
+          <div className="lock-form-actions">
+            <button type="submit" className="btn-primary btn-sm" disabled={busy}>
+              {busy ? '저장 중...' : '저장'}
+            </button>
+            <button type="button" className="btn-ghost btn-sm" onClick={reset}>취소</button>
+          </div>
+        </form>
+      )}
+
+      {cfg.pinSet && mode === 'idle' && (
+        <>
+          <label className="set-row lock-toggle">
+            <span>
+              이 기기에서 자리비움 잠금 사용
+              <span className="set-plan-note">기기마다 따로 켭니다</span>
+            </span>
+            <input
+              type="checkbox"
+              checked={cfg.enabled}
+              onChange={(e) => { writeEnabled(userId, e.target.checked); sync() }}
+              aria-label="이 기기에서 자리비움 잠금 사용"
+            />
+          </label>
+
+          <div className="cat-select" role="group" aria-label="잠기기까지 기다리는 시간">
+            {IDLE_CHOICES.map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={`chip ${cfg.minutes === m ? 'chip-on' : ''}`}
+                onClick={() => { writeIdleMinutes(userId, m); sync() }}
+                aria-pressed={cfg.minutes === m}
+                disabled={!cfg.enabled}
+              >{m}분</button>
+            ))}
+          </div>
+          <p className="set-hint">
+            이만큼 아무 입력이 없으면 잠깁니다. 한 번 풀면 2시간 동안은 다시 잠기지 않아요.
+            스위치를 꺼 두어도 헤더의 🔒 버튼(Ctrl+Shift+L)은 언제나 씁니다.
+          </p>
+
+          <div className="lock-form-actions">
+            <button className="btn-ghost btn-sm" onClick={() => setMode('new')}>PIN 변경</button>
+            <button
+              className="btn-ghost btn-sm cm-del"
+              onClick={() => {
+                if (!window.confirm('PIN 을 지우면 자리비움 잠금이 꺼집니다. 지울까요?')) return
+                clearPin(userId)
+                sync()
+              }}
+            >PIN 지우기</button>
+          </div>
+        </>
+      )}
+    </section>
   )
 }

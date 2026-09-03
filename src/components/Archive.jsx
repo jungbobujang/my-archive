@@ -16,6 +16,9 @@ import Today from './Today.jsx'
 import Trash from './Trash.jsx'
 import { SkeletonCards } from './Skeleton.jsx'
 import Settings from './Settings.jsx'
+import LockScreen from './LockScreen.jsx'
+import { useIdleLock } from '../hooks.js'
+import { readLockConfig, inGrace, endGrace } from '../lock.js'
 
 // categoryIds 가 없을 때 넘길 고정 빈 배열 (매번 [] 를 새로 만들면 ItemCard 의 memo 가 풀린다)
 const NO_CATEGORIES = []
@@ -63,6 +66,45 @@ export default function Archive({ session, onNavigate }) {
   // 좁은 화면에서 상단 보조 버튼들을 담는 ⋯ 메뉴 (넓은 화면에서는 CSS 로 그냥 한 줄이 된다)
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef(null)
+
+  // ── 자리비움 잠금 ──────────────────────────────────────────
+  // 설정은 기기(localStorage)에 있고 PIN 이 없으면 통째로 꺼진 상태다.
+  const userId = session.user.id
+  const [lockCfg, setLockCfg] = useState(() => readLockConfig(userId))
+  const [locked, setLocked] = useState(false)
+  const lockedRef = useRef(false)
+  useEffect(() => { lockedRef.current = locked }, [locked])
+
+  const syncLockCfg = useCallback(() => setLockCfg(readLockConfig(userId)), [userId])
+
+  // 수동 잠금. 기기 스위치가 꺼져 있어도 PIN 만 걸려 있으면 눌러서 잠글 수 있다 —
+  // 평소에는 아무 비용이 없다가 자리를 뜰 때 한 번 쓰는 쪽이 대부분의 사람에게 맞다.
+  // 사람이 직접 잠갔으므로 '방금 풀었으니 봐준다'(유예)는 여기서 걷어낸다.
+  const lockNow = useCallback(() => {
+    if (!lockCfg.pinSet) return
+    endGrace(userId)
+    setMenuOpen(false)
+    setLocked(true)
+  }, [lockCfg.pinSet, userId])
+
+  useIdleLock({
+    enabled: lockCfg.enabled && !locked,
+    minutes: lockCfg.minutes,
+    onIdle: () => { if (!inGrace(userId)) setLocked(true) }
+  })
+
+  // 자리를 뜨면서 한 손으로 누르는 단축키. Ctrl(⌘)+Shift+L.
+  useEffect(() => {
+    if (!lockCfg.pinSet) return
+    function onKey(e) {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'L' || e.key === 'l')) {
+        e.preventDefault()
+        lockNow()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [lockCfg.pinSet, lockNow])
 
   useEffect(() => {
     if (!menuOpen) return
@@ -381,6 +423,7 @@ export default function Archive({ session, onNavigate }) {
   }
 
   async function exportBackup() {
+    if (lockedRef.current) return
     setExporting(true)
     try {
       const [allItems, allCategories, allSlots, allLinks] = [
@@ -409,6 +452,13 @@ export default function Archive({ session, onNavigate }) {
 
       const d = new Date()
       const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
+
+      // 내보내기를 누른 뒤 다 만들기 전에 잠겼을 수 있다. 그때는 내려받지 않는다 —
+      // 잠긴 화면 뒤에서 파일이 떨어지면 가려 둔 내용이 그대로 새어 나간다.
+      if (lockedRef.current) {
+        toast.error('잠겨 있는 동안에는 내보낼 수 없어요')
+        return
+      }
 
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
@@ -445,7 +495,7 @@ export default function Archive({ session, onNavigate }) {
   async function handleImportFile(e) {
     const file = e.target.files?.[0]
     e.target.value = '' // 같은 파일을 다시 골라도 change 가 뜨도록
-    if (!file) return
+    if (!file || lockedRef.current) return
 
     let backup
     try {
@@ -537,6 +587,15 @@ export default function Archive({ session, onNavigate }) {
 
   const filterActive = categoryId || activeTag || starredOnly || statusFilter || debounced
 
+  // 잠겨 있으면 본문을 아예 그리지 않는다. 가림막을 덮는 대신 이렇게 하는 이유는
+  // LockScreen.jsx 머리말에 적어 두었다 — 덮기만 하면 글자가 DOM 에 남는다.
+  // 이 return 은 훅을 모두 부른 뒤에 있고, Archive 자신은 마운트된 채로 있다.
+  // 그래서 검색어·탭·열려 있던 모달 같은 상태가 잠금 동안 그대로 살아 있고,
+  // 풀면 있던 자리로 돌아온다 (쓰던 글은 ItemModal 이 초안으로 남겨 둔다).
+  if (locked) {
+    return <LockScreen userId={userId} onUnlock={() => setLocked(false)} />
+  }
+
   return (
     <div className="archive">
       <header className="topbar">
@@ -552,6 +611,15 @@ export default function Archive({ session, onNavigate }) {
         </button>
         <div className="topbar-actions" ref={menuRef}>
           <button className="btn-primary" onClick={() => setModalItem(null)}>+ 새 항목</button>
+          {/* PIN 을 건 기기에서만 보인다. PIN 이 없으면 잠가도 풀 길이 없다. */}
+          {lockCfg.pinSet && (
+            <button
+              className="btn-ghost lock-btn"
+              onClick={lockNow}
+              title="지금 잠그기 (Ctrl+Shift+L)"
+              aria-label="지금 잠그기"
+            >🔒</button>
+          )}
           <button
             className="btn-ghost more-toggle"
             onClick={() => setMenuOpen((v) => !v)}
@@ -844,9 +912,11 @@ export default function Archive({ session, onNavigate }) {
       {settingsOpen && (
         <Settings
           email={session.user.email}
+          userId={userId}
           themePref={themePref}
           onThemeChange={setThemePref}
           onOpenPricing={() => { setSettingsOpen(false); onNavigate('/pricing') }}
+          onLockChanged={syncLockCfg}
           onClose={() => setSettingsOpen(false)}
         />
       )}
