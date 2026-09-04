@@ -10,7 +10,7 @@ import {
   supabase, extractUrls, parseLinks, parseTags, youtubeThumb, ymd, fetchLinkTitle,
   parseImages, joinImages, uploadImage, imageFilesFromPaste, MAX_IMAGES,
   parseFiles, joinFiles, uploadFile, signedFileUrl, fileRejectReason, fileIcon, formatBytes,
-  removeStorageFiles, removeStorageImages, splitByKind, MAX_FILES, FILE_EXTS,
+  removeStorageFiles, removeStorageImages, splitByKind, MAX_FILES,
   treeOrder, categoryPath,
   stripInvisibleAll, saveErrorMessage, byteLength, DRAFT_DEBOUNCE_MS, DRAFT_MAX_BYTES
 } from '../supabase.js'
@@ -53,7 +53,6 @@ function isMissingFilesColumn(err) {
   return false
 }
 
-const FILE_ACCEPT = FILE_EXTS.map((e) => `.${e}`).join(',')
 
 export default function ItemModal({ item, categories, slots, userId, onClose, onSaved }) {
   const isEdit = !!item
@@ -1056,7 +1055,9 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
                 ref={attachRef}
                 type="file"
                 multiple
-                accept={FILE_ACCEPT}
+                // accept 를 두지 않는다 — 확장자 정책이 차단 목록으로 바뀌어 '고를 수 있는 것'
+                // 쪽에는 제한이 없다. accept 로 좁히면 고르개 창에서 csv·확장자 없는 파일이
+                // 회색으로 보여, 실제로는 붙는 파일을 못 붙는 것처럼 보이게 만든다.
                 className="file-input"
                 onChange={(e) => {
                   routeFiles(e.target.files ?? [])
@@ -1070,8 +1071,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
                 disabled={files.length >= MAX_FILES}
               >📎 파일 첨부</button>
               <p className="img-hint">
-                끌어놓기로도 올릴 수 있어요 · 최대 {MAX_FILES}개 · 개당 10MB ·
-                {' '}{FILE_EXTS.join('·')}
+                끌어놓기로도 올릴 수 있어요 · 최대 {MAX_FILES}개 · 개당 10MB
               </p>
             </div>
           </div>

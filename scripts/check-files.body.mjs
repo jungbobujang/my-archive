@@ -4,6 +4,7 @@ import {
   fileRejectReason, storageKeyFor, originalNameFromKey, parseFiles, joinFiles,
   formatBytes, fileIcon, filePathsOf, totalFileBytes, splitByKind,
   imagePathFromUrl, MAX_FILES, FILE_MAX_BYTES,
+  BLOCKED_EXTS, BLOCKED_FILE_MESSAGE, isBlockedFileName,
   stripInvisible, saveErrorMessage, byteLength,
   SESSION_EXPIRED_MESSAGE, SAVE_FALLBACK_MESSAGE, DRAFT_DEBOUNCE_MS, DRAFT_MAX_BYTES
 } from '../src/supabase.js'
@@ -55,20 +56,41 @@ const mk = (name, size, type = '') => ({ name, size, type })
 const realFile = (name, bytes = 8, type = 'application/octet-stream') =>
   new window.File([new Uint8Array(bytes)], name, { type })
 
-// ── 1. 확장자 화이트리스트 ───────────────────────────────────
+// ── 1. 확장자 차단 목록(허용 목록 폐지) ─────────────────────
 {
-  for (const ext of ['hwp', 'hwpx', 'pdf', 'docx', 'xlsx', 'pptx', 'txt', 'zip']) {
-    check(`허용: .${ext}`, fileRejectReason(mk(`보고서.${ext}`, 1024)) === null)
+  // 예전 화이트리스트 8종은 물론, 그 바깥의 흔한 것들도 이제 통과한다.
+  const passing = [
+    'hwp', 'hwpx', 'pdf', 'docx', 'xlsx', 'pptx', 'txt', 'zip',
+    'csv', 'md', 'json', 'xml', 'yml', 'log', 'psd', 'ai', 'dwg', 'epub', 'sh', 'dmg', 'iso'
+  ]
+  for (const ext of passing) {
+    check(`허용: .${ext}`, fileRejectReason(mk(`보고서.${ext}`, 1024)) === null,
+      fileRejectReason(mk(`보고서.${ext}`, 1024)))
   }
-  for (const bad of ['exe', 'sh', 'bat', 'js', 'dmg', 'msi']) {
+  // 차단은 '받는 쪽에서 두 번 눌리면 실행되는 것' 만이다.
+  for (const bad of BLOCKED_EXTS) {
     const why = fileRejectReason(mk(`무언가.${bad}`, 1024))
-    check(`거부: .${bad}`, typeof why === 'string' && why.includes(`.${bad}`), why)
+    check(`차단: .${bad}`, typeof why === 'string' && why.startsWith(BLOCKED_FILE_MESSAGE), why)
+    check(`차단 문구에 어느 확장자인지: .${bad}`, typeof why === 'string' && why.includes(`.${bad}`), why)
   }
-  check('거부: 확장자 없음', fileRejectReason(mk('README', 10)) !== null)
+  check('차단 안내 문구', fileRejectReason(mk('설치.exe', 10)) === `${BLOCKED_FILE_MESSAGE} (.exe)`,
+    fileRejectReason(mk('설치.exe', 10)))
+  check('차단은 대문자 확장자도 잡는다(.EXE)', fileRejectReason(mk('설치.EXE', 10)) !== null,
+    fileRejectReason(mk('설치.EXE', 10)))
+  check('허용: 확장자 없음(README)', fileRejectReason(mk('README', 10)) === null,
+    fileRejectReason(mk('README', 10)))
+  check('허용: 확장자 없음(Makefile)', fileRejectReason(mk('Makefile', 10)) === null)
+  check('허용: 점으로 시작하는 이름(.gitignore)', fileRejectReason(mk('.gitignore', 10)) === null,
+    fileRejectReason(mk('.gitignore', 10)))
   check('허용: 대문자 확장자(.PDF)', fileRejectReason(mk('보고서.PDF', 10)) === null)
   check('허용: 점이 여러 개인 이름', fileRejectReason(mk('2026.1학기.기말.hwp', 10)) === null)
-  // 이미지는 파일 칸이 아니라 이미지 칸으로 간다(splitByKind). 파일 검증에서는 거부가 맞다.
-  check('거부: 이미지 확장자', fileRejectReason(mk('screenshot.png', 10)) !== null)
+  // 이미지는 파일 칸에 떨어져도 splitByKind 가 이미지 칸으로 보낸다. 파일 검증까지 오면
+  // 그것은 이미 이미지가 아니라는 뜻이므로, 여기서 굳이 막지 않는다(차단 목록에 없다).
+  check('이미지 확장자는 차단 목록이 아니다', fileRejectReason(mk('screenshot.png', 10)) === null)
+  check('isBlockedFileName: exe 는 참', isBlockedFileName('설치.exe') === true)
+  check('isBlockedFileName: csv 는 거짓', isBlockedFileName('표.csv') === false)
+  check('차단 목록이 요청한 11종 그대로',
+    BLOCKED_EXTS.join(',') === 'exe,msi,bat,cmd,scr,com,pif,vbs,js,jar,apk', BLOCKED_EXTS.join(','))
 }
 
 // ── 2. 10MB 상한 ────────────────────────────────────────────
@@ -79,9 +101,12 @@ const realFile = (name, bytes = 8, type = 'application/octet-stream') =>
   check('10MB + 1바이트는 거부', over !== null, over)
   const big = fileRejectReason(mk('큰파일.pdf', Math.round(12.3 * 1024 * 1024)))
   check('거부 문구에 현재 용량', big === '10MB 이하만 첨부할 수 있습니다 (현재 12.3MB)', big)
-  // 확장자를 용량보다 먼저 본다 — 100MB 짜리 exe 에 "10MB 이하만" 은 엉뚱한 안내다
+  // 차단 확장자를 용량보다 먼저 본다 — 100MB 짜리 exe 에 "10MB 이하만" 은 엉뚱한 안내다
   const exeBig = fileRejectReason(mk('설치.exe', 100 * 1024 * 1024))
-  check('큰 exe 는 용량이 아니라 확장자로 거부', exeBig.includes('.exe'), exeBig)
+  check('큰 exe 는 용량이 아니라 확장자로 거부', exeBig.startsWith(BLOCKED_FILE_MESSAGE), exeBig)
+  // 확장자 없는 큰 파일은 용량으로 거부된다(확장자로 거부될 이유가 없다)
+  const noExtBig = fileRejectReason(mk('DUMP', FILE_MAX_BYTES + 1))
+  check('확장자 없는 큰 파일은 용량으로 거부', noExtBig.includes('10MB 이하만'), noExtBig)
 }
 
 // ── 3. 항목당 5개 ───────────────────────────────────────────
@@ -105,6 +130,19 @@ const realFile = (name, bytes = 8, type = 'application/octet-stream') =>
   const slashy = storageKeyFor('item-1', '폴더/이름.pdf', 1)
   check('이름 속 / 는 폴더가 되지 않는다', slashy === 'item-1/1_폴더_이름.pdf', slashy)
   check('한글 이름의 아이콘', fileIcon('계획서.hwp') === '📘' && fileIcon('표.xlsx') === '📊')
+  // 확장자가 자유로워진 뒤로는 '모르는 확장자' 가 정상 입력이다 —
+  // 아이콘이 없어 줄이 비어 보이는 일이 없어야 한다.
+  check('모르는 확장자도 아이콘이 있다', fileIcon('무언가.qqq') === '📄', fileIcon('무언가.qqq'))
+  check('확장자 없는 파일도 아이콘이 있다', fileIcon('README') === '📄', fileIcon('README'))
+  check('아는 형식은 기존 아이콘 그대로',
+    fileIcon('a.pdf') === '📕' && fileIcon('a.pptx') === '📽' && fileIcon('a.zip') === '🗜'
+    && fileIcon('a.txt') === '📃' && fileIcon('a.docx') === '📄')
+  check('새로 아는 형식: csv 는 표 아이콘', fileIcon('표.csv') === '📊', fileIcon('표.csv'))
+  check('새로 아는 형식: md 는 글 아이콘', fileIcon('메모.md') === '📃', fileIcon('메모.md'))
+  check('이미지 확장자 아이콘', fileIcon('사진.png') === '🖼', fileIcon('사진.png'))
+  for (const n of ['README', '무언가.qqq', '표.csv', '계획.hwp', '', '이름만']) {
+    check(`아이콘이 빈칸이 아니다: ${n || '(빈 이름)'}`, typeof fileIcon(n) === 'string' && fileIcon(n).length > 0)
+  }
 }
 
 // ── 5. 메타 파싱·합계 ───────────────────────────────────────
@@ -200,6 +238,42 @@ const imagesBucket = () => store.buckets['archive-images']
   check('저장 뒤에도 스토리지에 남아 있다', filesBucket().has(key))
   check('저장 뒤 초안은 지워진다', window.sessionStorage.getItem('ma:draft:new') === null)
   check('경고 없이 저장됐다', savedWarn === null, savedWarn)
+  act(() => { root.unmount() })
+}
+
+// ── 7-b. 화이트리스트 폐지: csv·md·json·확장자 없는 파일이 실제로 올라간다 ──
+//   함수 판정만이 아니라 모달 → 업로드 → 저장까지 한 줄로 통과하는지 본다.
+//   같은 뭉치에 exe 를 섞어 넣어, 나머지는 올라가고 그것만 걸리는지도 함께 본다.
+{
+  resetStore()
+  window.sessionStorage.clear()
+  const { host, root } = mount(React.createElement(ItemModal, {
+    item: null, categories: [], slots: [], userId: 'u1', onClose: () => {}, onSaved: () => {}
+  }))
+
+  await attach(host, [
+    realFile('명단.csv', 100), realFile('메모.md', 100),
+    realFile('설정.json', 100), realFile('README', 100),
+    realFile('설치.exe', 100)
+  ])
+
+  check('예전 화이트리스트 밖 4종이 모두 올라간다', filesBucket().size === 4, filesBucket().size)
+  const names = qa(host, '.file-name').map((el) => el.textContent)
+  check('네 파일 이름이 화면에 있다',
+    JSON.stringify(names) === JSON.stringify(['명단.csv', '메모.md', '설정.json', 'README']), names)
+  check('exe 는 올라가지 않았다', !names.includes('설치.exe'), names)
+  const err = q(host, '.form-error')?.textContent ?? ''
+  check('exe 차단 안내가 화면에 뜬다', err.startsWith(BLOCKED_FILE_MESSAGE), err)
+  const icons = qa(host, '.file-icon').map((el) => el.textContent)
+  check('네 줄 모두 아이콘이 있다', icons.length === 4 && icons.every((s) => s && s.length > 0), icons)
+  check('확장자 없는 파일은 범용 문서 아이콘', icons[3] === '📄', icons[3])
+  check('csv 는 표 아이콘', icons[0] === '📊', icons[0])
+
+  await act(async () => { click(q(host, '.btn-primary')) })
+  const row = store.rows.items[0]
+  check('저장된 files 에 네 건이 담긴다', (row?.files ?? []).length === 4, (row?.files ?? []).length)
+  check('저장된 files 에 exe 가 없다',
+    !(row?.files ?? []).some((f) => /\.exe$/i.test(f.name)), JSON.stringify(row?.files))
   act(() => { root.unmount() })
 }
 

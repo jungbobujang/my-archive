@@ -128,14 +128,38 @@ export async function uploadImage(file, userId) {
 export const FILE_BUCKET = 'archive-files'
 export const MAX_FILES = 5
 export const FILE_MAX_BYTES = 10 * 1024 * 1024
-export const FILE_EXTS = ['hwp', 'hwpx', 'pdf', 'docx', 'xlsx', 'pptx', 'txt', 'zip']
+
+// 확장자 정책은 **허용 목록이 아니라 차단 목록**이다.
+//
+// 허용 목록으로 두면 csv·md·json·확장자 없는 파일처럼 아무 문제 없는 것들이 계속 걸리고,
+// 그때마다 목록에 한 줄을 더하는 일이 반복된다. 실제로 막고 싶은 것은 '받는 쪽에서
+// 두 번 눌리면 그대로 실행되는 것' 뿐이므로, 그것만 이름으로 적고 나머지는 모두 통과시킨다.
+// 확장자가 없는 파일(README, Makefile)도 통과다 — 이름에 점이 없다는 것은 위험 신호가 아니다.
+export const BLOCKED_EXTS = [
+  'exe', 'msi', 'bat', 'cmd', 'scr', 'com', 'pif', 'vbs', 'js', 'jar', 'apk'
+]
+export const BLOCKED_FILE_MESSAGE = '실행 파일은 첨부할 수 없습니다'
 // 무료 플랜 기준. 게이지 표시에만 쓰고, 넘는다고 막지는 않는다 (실제 상한은 Supabase 가 건다).
 export const STORAGE_QUOTA_BYTES = 1024 * 1024 * 1024
 export const STORAGE_WARN_RATIO = 0.8
 
+// 아는 형식은 아는 얼굴로, 모르는 형식은 **범용 문서 아이콘**으로 — 빈칸은 만들지 않는다.
+// 확장자가 자유로워진 뒤로 여기 없는 이름이 들어오는 것이 정상이 되었으므로,
+// 아이콘이 없어서 줄이 비어 보이는 일이 없도록 fileIcon 이 언제나 무언가를 돌려준다.
+const GENERIC_FILE_ICON = '📄'
 const FILE_ICONS = {
-  pdf: '📕', hwp: '📘', hwpx: '📘', docx: '📄',
-  xlsx: '📊', pptx: '📽', txt: '📃', zip: '🗜'
+  pdf: '📕',
+  hwp: '📘', hwpx: '📘',
+  doc: '📄', docx: '📄', odt: '📄', rtf: '📄',
+  xls: '📊', xlsx: '📊', csv: '📊', ods: '📊',
+  ppt: '📽', pptx: '📽', odp: '📽',
+  txt: '📃', md: '📃', log: '📃',
+  zip: '🗜', '7z': '🗜', rar: '🗜', tar: '🗜', gz: '🗜',
+  png: '🖼', jpg: '🖼', jpeg: '🖼', gif: '🖼', webp: '🖼', svg: '🖼', bmp: '🖼',
+  avif: '🖼', heic: '🖼', heif: '🖼',
+  mp3: '🎵', wav: '🎵', m4a: '🎵', flac: '🎵',
+  mp4: '🎬', mov: '🎬', avi: '🎬', mkv: '🎬', webm: '🎬',
+  json: '🧾', xml: '🧾', yml: '🧾', yaml: '🧾', html: '🧾', css: '🧾'
 }
 
 export function extOfName(name) {
@@ -143,8 +167,12 @@ export function extOfName(name) {
   return m ? m[1].toLowerCase() : ''
 }
 
+export function isBlockedFileName(name) {
+  return BLOCKED_EXTS.includes(extOfName(name))
+}
+
 export function fileIcon(name) {
-  return FILE_ICONS[extOfName(name)] ?? '📎'
+  return FILE_ICONS[extOfName(name)] || GENERIC_FILE_ICON
 }
 
 // 사람이 읽는 용량. 오류 문구("현재 12.3MB")와 사용량 게이지가 같은 함수를 쓴다.
@@ -156,12 +184,12 @@ export function formatBytes(n) {
 }
 
 // 붙일 수 있는 파일인지. 붙일 수 없으면 그 이유를 문장으로 돌려준다(없으면 null).
-// 확장자를 먼저 본다 — 100MB 짜리 exe 에 "10MB 이하만" 이라고 답하면 엉뚱한 안내가 된다.
+// 차단 확장자를 먼저 본다 — 100MB 짜리 exe 에 "10MB 이하만" 이라고 답하면 엉뚱한 안내가 된다.
+// 여러 개를 한꺼번에 떨어뜨렸을 때 어느 것이 걸렸는지 알 수 있게 확장자를 괄호로 덧붙인다.
 export function fileRejectReason(file, currentCount = 0) {
   const name = file?.name ?? ''
-  if (!FILE_EXTS.includes(extOfName(name))) {
-    const ext = extOfName(name)
-    return `${FILE_EXTS.join('·')} 만 첨부할 수 있습니다${ext ? ` (.${ext})` : ''}`
+  if (isBlockedFileName(name)) {
+    return `${BLOCKED_FILE_MESSAGE} (.${extOfName(name)})`
   }
   if ((file?.size ?? 0) > FILE_MAX_BYTES) {
     return `10MB 이하만 첨부할 수 있습니다 (현재 ${formatBytes(file.size)})`

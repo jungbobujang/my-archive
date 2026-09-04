@@ -67,6 +67,33 @@ on conflict (id) do nothing;
 
 ---
 
+### 🟡 확장자 정책 변경 (블랙리스트) — **버킷 MIME 제한이 걸려 있을 때만 실행**
+
+앱은 이제 모든 확장자를 받습니다(실행 파일 11종만 차단). 그런데 스토리지 버킷에
+`allowed_mime_types` 가 걸려 있으면 브라우저 검사를 통과한 파일이 **업로드에서** 막힙니다.
+
+`supabase/setup.sql` 은 이 버킷을 만들 때 `allowed_mime_types` 를 준 적이 없습니다
+(= NULL = 제한 없음). 그래서 저장소 정의대로라면 **할 일이 없습니다.**
+다만 대시보드에서 손으로 버킷을 만들었거나 나중에 제한을 걸었을 수 있으니, 먼저 확인하세요.
+
+```sql
+-- ① 확인 — allowed_mime_types 가 null 이면 제한 없음(할 일 없음)
+select id, public, file_size_limit, allowed_mime_types
+from storage.buckets
+where id in ('archive-files', 'archive-images');
+
+-- ② 위에서 allowed_mime_types 가 null 이 아닐 때만 실행 — MIME 제한 해제
+--    (file_size_limit 10485760 은 그대로 둡니다. 용량 상한은 두 겹으로 유지)
+update storage.buckets
+set allowed_mime_types = null
+where id = 'archive-files';
+```
+
+> 앱의 anon 키로는 `storage.buckets` 를 읽을 수 없어(정책상 가려집니다) 코드 쪽에서
+> 라이브 상태를 확인할 방법이 없습니다. SQL 에디터나 대시보드에서 ①을 한 번 보세요.
+
+---
+
 ### 그 밖
 
 **없습니다.**
