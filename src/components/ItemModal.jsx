@@ -31,18 +31,31 @@ function shortenUrl(url) {
   }
 }
 
-// 본문에서 제목으로 쓸 조각 — '첫 번째 비어 있지 않은 줄' 의 앞 20자.
-// 글 전체를 trim 해서 앞 20자를 떼면 두 가지가 걸린다.
+const AUTO_TITLE_MAX = 30
+
+// 본문에서 제목으로 쓸 조각 — '첫 번째 비어 있지 않은 줄' 의 앞 30자.
+// 글 전체를 trim 해서 앞 30자를 떼면 두 가지가 걸린다.
 //   · 빈 줄로 시작하는 글은 첫 줄이 통째로 공백이라 제목이 엉뚱한 데서 시작한다.
-//   · 첫 줄이 짧으면 20자가 줄바꿈을 넘어가 제목 한가운데에 개행이 박힌다.
+//   · 첫 줄이 짧으면 30자가 줄바꿈을 넘어가 제목 한가운데에 개행이 박힌다.
 // 줄 단위로 훑으면 둘 다 없다. 쓸 줄이 하나도 없으면 빈 문자열을 돌려주고,
 // 부르는 쪽이 다음 후보로 넘어간다.
 function titleFromBody(text) {
   for (const line of String(text ?? '').split('\n')) {
     const one = line.trim()
-    if (one) return one.slice(0, 20).trim()
+    if (one) return one.slice(0, AUTO_TITLE_MAX).trim()
   }
   return ''
+}
+
+// 첨부 파일 이름에서 제목으로 쓸 조각 — 확장자를 떼고 앞 30자.
+// '.gitignore' 처럼 점으로 시작하는 이름은 그 점이 확장자 구분이 아니라 이름의 일부이므로
+// 통째로 둔다(at > 0). 확장자를 뗀 뒤 남는 것이 없으면 빈 문자열이고, 부르는 쪽이 넘어간다.
+function titleFromFileName(name) {
+  const raw = String(name ?? '').trim()
+  if (!raw) return ''
+  const at = raw.lastIndexOf('.')
+  const base = at > 0 ? raw.slice(0, at) : raw
+  return base.trim().slice(0, AUTO_TITLE_MAX).trim()
 }
 
 // setup.sql 을 아직 실행하지 않아 items.files 열이 없는 DB 인지.
@@ -458,21 +471,28 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   }
 
   // 제목이 비었을 때 대신 지어 준다.
-  //   ① 링크가 있으면 첫 링크의 제목 (noembed)
-  //   ② 내용이 있으면 첫 번째 비어 있지 않은 줄의 앞 20자
-  //   ③ 이미지만 있으면 '이미지 YYYY-MM-DD'
-  // ②를 ③보다 앞에 둔 이유: 글과 이미지가 함께 있을 때 날짜보다 글 첫머리가 훨씬 잘 읽힌다.
-  // 첨부 파일 이름은 쓰지 않는다 — 사양에 없다.
-  // ②가 빈 값이면(공백·빈 줄뿐인 글) 거기서 멈추지 않고 ③으로 넘어간다.
-  // body 를 받는 이유: 저장 직전에 보이지 않는 문자를 턴 본문으로 제목을 지어야
-  // 화면의 글과 제목이 같아진다 (state 의 원본은 아직 그 문자를 물고 있다).
-  async function makeTitle(firstLink, bodyText = content) {
+  //   ① 내용이 있으면 첫 번째 비어 있지 않은 줄의 앞 30자
+  //   ② 링크가 있으면 첫 링크의 제목 (noembed)
+  //   ③ 첨부 파일이 있으면 첫 파일의 원본 이름(확장자를 떼고 앞 30자)
+  //   ④ 이미지가 있으면 '이미지 YYYY-MM-DD'
+  //   ⑤ 그래도 없으면 링크 주소 자체, 마지막으로 '메모 YYYY-MM-DD'
+  //
+  // ①을 ②보다 앞에 둔 이유: 사람이 직접 쓴 글이 있는데 링크 사이트 제목("YouTube" 따위)이
+  // 제목이 되면, 목록에서 그 항목이 무엇이었는지 알아볼 수 없다. 사람이 쓴 글이 먼저다.
+  // ①을 ④보다 앞에 둔 이유도 같다 — 글과 이미지가 함께 있으면 날짜보다 글 첫머리가 잘 읽힌다.
+  // 어느 후보든 빈 값이면(공백뿐인 글, 이름이 없는 파일) 멈추지 않고 다음 후보로 넘어간다.
+  //
+  // body·fileList 를 인자로 받는 이유: 저장 직전에 보이지 않는 문자를 턴 본문으로 제목을
+  // 지어야 화면의 글과 제목이 같아진다 (state 의 원본은 아직 그 문자를 물고 있다).
+  async function makeTitle(firstLink, bodyText = content, fileList = files) {
+    const body = titleFromBody(bodyText)
+    if (body) return body
     if (firstLink) {
       const fetched = await fetchLinkTitle(firstLink)
       if (fetched) return fetched
     }
-    const body = titleFromBody(bodyText)
-    if (body) return body
+    const fromFile = titleFromFileName(fileList?.[0]?.name)
+    if (fromFile) return fromFile
     if (images.length > 0) return `이미지 ${ymd(new Date())}`
     return firstLink || `메모 ${ymd(new Date())}`
   }
@@ -731,10 +751,14 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
           <input
             value={title}
             onChange={(e) => { setTitle(e.target.value); setError('') }}
+            // 자리말은 makeTitle 과 **같은 차례**로 말한다. 본문이 있는데 "링크 제목을
+            // 가져옵니다" 라고 적어 두면, 실제로는 본문 첫 줄이 제목이 되므로 거짓말이 된다.
             placeholder={
-              allLinks.length > 0 ? '비우면 링크 제목을 가져옵니다'
-                : images.length > 0 ? `비우면 '이미지 ${ymd(new Date())}'`
-                  : '쇼츠 대본 - AI 활용법 3가지'
+              titleFromBody(content) ? '비우면 본문 첫 줄로 지어요'
+                : allLinks.length > 0 ? '비우면 링크 제목을 가져옵니다'
+                  : files.length > 0 ? '비우면 첨부 파일 이름으로 지어요'
+                    : images.length > 0 ? `비우면 '이미지 ${ymd(new Date())}'`
+                      : '쇼츠 대본 - AI 활용법 3가지'
             }
             autoFocus
           />

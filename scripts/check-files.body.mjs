@@ -261,13 +261,12 @@ const imagesBucket = () => store.buckets['archive-images']
   check('내려받기가 서명 주소를 만든다', signed?.bucket === 'archive-files' && signed?.path === key)
   check('원본 이름으로 저장되게 요청한다', signed?.download === '2026학년도 계획서.hwp', signed?.download)
 
-  // 제목을 비운 채 저장 → 첫 파일 이름이 제목이 된다
+  // 제목을 비운 채 저장 → 첫 파일 이름이 제목이 된다(확장자를 뗀다)
   await act(async () => { click(q(host, '.btn-primary')) })
   const row = store.rows.items[0]
   check('저장된 항목이 1개', store.rows.items.length === 1, store.rows.items.length)
-  // 제목 자동 생성에 파일 이름은 쓰지 않는다(사양 밖이라 뺐다).
-  // 링크도 내용도 이미지도 없으면 예전처럼 '메모 YYYY-MM-DD' 다.
-  check('제목에 파일 이름을 쓰지 않는다', /^메모 \d{4}-\d{2}-\d{2}$/.test(row?.title ?? ''), row?.title)
+  check('파일만 있으면 파일 이름이 제목', row?.title === '2026학년도 계획서', JSON.stringify(row?.title))
+  check('제목에서 확장자를 뗀다', !(row?.title ?? '').includes('.hwp'), row?.title)
   check('files 에 메타 3가지만', JSON.stringify(row?.files) === JSON.stringify([{ path: key, name: '2026학년도 계획서.hwp', size: 1234 }]), JSON.stringify(row?.files))
   check('저장 뒤에도 스토리지에 남아 있다', filesBucket().has(key))
   check('저장 뒤 초안은 지워진다', window.sessionStorage.getItem('ma:draft:new') === null)
@@ -711,7 +710,9 @@ const imagesBucket = () => store.buckets['archive-images']
     const { row } = await saveWithBody('   \n\n \t \n  ', realFile('붙임.pdf', 10))
     check('공백뿐 + 파일: 저장된다', !!row, row?.title)
     check('공백뿐 + 파일: 제목이 비지 않는다', (row?.title ?? '').trim().length > 0, JSON.stringify(row?.title))
-    check('공백뿐 + 파일: 메모 날짜로 넘어간다', 날짜꼴.test(row?.title ?? ''), JSON.stringify(row?.title))
+    // 본문이 공백뿐이면 다음 후보로 넘어간다 — 이제 그 자리에 파일 이름이 있다.
+    check('공백뿐 + 파일: 파일 이름으로 넘어간다', row?.title === '붙임', JSON.stringify(row?.title))
+    check('공백뿐 + 파일: 메모 날짜가 아니다', !날짜꼴.test(row?.title ?? ''), JSON.stringify(row?.title))
   }
 
   // ④ 제목 칸에 공백만 쳐 둔 경우도 그 공백이 제목이 되면 안 된다
@@ -733,6 +734,165 @@ const imagesBucket = () => store.buckets['archive-images']
     const row = store.rows.items[0]
     check('제목 칸이 공백뿐: 본문에서 지어 준다', row?.title === '본문 첫 줄', JSON.stringify(row?.title))
     act(() => { root.unmount() })
+  }
+
+  resetStore()
+}
+
+// ── 16-b. 제목 자동 생성 우선순위 ───────────────────────────
+//   ① 본문 첫 줄 → ② 링크 제목 → ③ 첫 파일 이름(확장자 제외) → ④ 이미지 날짜 → ⑤ 메모 날짜.
+//   점검에서는 fetch 가 막혀 있어 ②(noembed)는 늘 실패한다 — 그때는 다음 후보로 넘어가고,
+//   끝까지 남으면 링크 주소 자체가 제목이 된다(예전 그대로).
+{
+  const 날짜꼴 = /^메모 \d{4}-\d{2}-\d{2}$/
+  const setText = (el, v) => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+    setter.call(el, v)
+    el.dispatchEvent(new window.Event('input', { bubbles: true }))
+  }
+  const setInput = (el, v) => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    setter.call(el, v)
+    el.dispatchEvent(new window.Event('input', { bubbles: true }))
+  }
+
+  // body·link·file·image 를 골라 넣고 제목 없이 저장한 뒤 저장된 행을 돌려준다
+  async function titleOf({ body = '', link = '', file = null, image = false } = {}) {
+    resetStore()
+    window.sessionStorage.clear()
+    const { host, root } = mount(React.createElement(ItemModal, {
+      item: null, categories: [], slots: [], userId: 'u1', onClose: () => {}, onSaved: () => {}
+    }))
+    if (body) await act(async () => { setText(q(host, 'textarea'), body) })
+    if (link) {
+      const box = q(host, '.link-add input')
+      await act(async () => { setInput(box, link) })
+      await act(async () => {
+        box.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      })
+    }
+    if (file) await attach(host, [file])
+    if (image) await attach(host, [realFile('사진.png', 20, 'image/png')], '.img-file')
+    const hint = q(host, '.field input')?.placeholder ?? ''
+    await act(async () => { click(q(host, '.btn-primary')) })
+    const row = store.rows.items[0] ?? null
+    act(() => { root.unmount() })
+    return { title: row?.title ?? null, hint }
+  }
+
+  // ① 본문이 있으면 본문이 최우선 — 링크·파일·이미지가 함께 있어도
+  {
+    const r = await titleOf({
+      body: '\n\n연구부 협의 정리\n둘째 줄', link: 'https://youtube.com/watch?v=abc',
+      file: realFile('첨부자료.pdf', 10)
+    })
+    check('① 본문 + 링크 + 파일 → 본문 첫 줄', r.title === '연구부 협의 정리', JSON.stringify(r.title))
+    check('① 자리말도 본문을 가리킨다', r.hint === '비우면 본문 첫 줄로 지어요', r.hint)
+  }
+  {
+    const r = await titleOf({ body: '\n\n텍스트가 여기서 시작합니다\n둘째 줄' })
+    check('① 빈 줄로 시작하는 본문', r.title === '텍스트가 여기서 시작합니다', JSON.stringify(r.title))
+  }
+  {
+    const long = '가'.repeat(50)
+    const r = await titleOf({ body: long })
+    check('① 본문은 앞 30자까지', r.title === '가'.repeat(30), (r.title ?? '').length)
+  }
+
+  // ①-대 ② 이 개편의 핵심: **링크 제목을 실제로 가져와도** 본문이 이긴다.
+  //   위의 다른 경우들은 noembed 가 막혀 있어 옛 차례로도 같은 답이 나온다 —
+  //   옛 차례와 갈리는 자리는 여기뿐이므로, 그 한 자리를 위해 fetch 를 잠깐 바꿔 끼운다.
+  //   (바깥으로 나가지 않는다. noembed 주소를 가로채 고정 응답을 돌려줄 뿐이다.)
+  {
+    const realFetch = globalThis.fetch
+    let asked = 0
+    globalThis.fetch = async (u) => {
+      if (String(u).includes('noembed.com')) {
+        asked += 1
+        return { json: async () => ({ title: 'YouTube' }) }
+      }
+      throw new Error('점검 중에는 바깥으로 나가지 않는다')
+    }
+    try {
+      const withBody = await titleOf({
+        body: '연구부 협의 정리', link: 'https://youtube.com/watch?v=abc'
+      })
+      check('①>② 본문이 있으면 링크 제목("YouTube")을 쓰지 않는다',
+        withBody.title === '연구부 협의 정리', JSON.stringify(withBody.title))
+      check('①>② 본문이 있으면 noembed 를 부르지도 않는다', asked === 0, asked)
+
+      const linkOnly = await titleOf({ link: 'https://youtube.com/watch?v=abc' })
+      check('② 본문이 없으면 링크 제목을 가져와 쓴다', linkOnly.title === 'YouTube', JSON.stringify(linkOnly.title))
+      check('② 그때는 noembed 를 부른다', asked > 0, asked)
+
+      const linkAndFile = await titleOf({
+        link: 'https://youtube.com/watch?v=abc', file: realFile('회의자료.hwp', 10)
+      })
+      check('②>③ 링크 제목을 가져오면 파일 이름보다 먼저',
+        linkAndFile.title === 'YouTube', JSON.stringify(linkAndFile.title))
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  }
+
+  // ② 링크만 — noembed 가 막혀 있으므로 주소 자체가 제목이 된다(종전 동작 유지)
+  {
+    const r = await titleOf({ link: 'https://example.com/a' })
+    check('② 링크만 → 링크 주소', r.title === 'https://example.com/a', JSON.stringify(r.title))
+    check('② 링크만: 메모 날짜가 아니다', !날짜꼴.test(r.title ?? ''), r.title)
+    check('② 자리말은 링크를 가리킨다', r.hint === '비우면 링크 제목을 가져옵니다', r.hint)
+  }
+
+  // ③ 파일만 — 확장자를 뗀 원본 이름
+  {
+    const r = await titleOf({ file: realFile('2026 지능형과학실 운영 계획(최종본).xlsx', 10) })
+    check('③ 파일만 → 확장자 뗀 파일명',
+      r.title === '2026 지능형과학실 운영 계획(최종본)', JSON.stringify(r.title))
+    check('③ 자리말은 파일을 가리킨다', r.hint === '비우면 첨부 파일 이름으로 지어요', r.hint)
+  }
+  {
+    const r = await titleOf({ file: realFile('README', 10) })
+    check('③ 확장자 없는 파일명은 통째로', r.title === 'README', JSON.stringify(r.title))
+  }
+  {
+    const r = await titleOf({ file: realFile('.gitignore', 10) })
+    check('③ 점으로 시작하는 이름은 자르지 않는다', r.title === '.gitignore', JSON.stringify(r.title))
+  }
+  {
+    const r = await titleOf({ file: realFile(`${'나'.repeat(50)}.pdf`, 10) })
+    check('③ 파일명도 앞 30자까지', r.title === '나'.repeat(30), (r.title ?? '').length)
+  }
+  {
+    // 링크가 있어도 링크 제목을 못 가져오면 파일 이름이 주소보다 먼저다
+    const r = await titleOf({ link: 'https://example.com/b', file: realFile('회의자료.hwp', 10) })
+    check('③ 링크 제목을 못 가져오면 파일 이름이 먼저', r.title === '회의자료', JSON.stringify(r.title))
+  }
+
+  // ④ 이미지만 — 파일보다 뒤, 메모 날짜보다 앞
+  {
+    const r = await titleOf({ image: true })
+    check('④ 이미지만 → 이미지 날짜', /^이미지 \d{4}-\d{2}-\d{2}$/.test(r.title ?? ''), JSON.stringify(r.title))
+  }
+  {
+    const r = await titleOf({ image: true, file: realFile('붙임자료.pdf', 10) })
+    check('④ 파일이 이미지보다 먼저', r.title === '붙임자료', JSON.stringify(r.title))
+  }
+  {
+    const r = await titleOf({ image: true, body: '사진 설명 한 줄' })
+    check('④ 본문이 이미지보다 먼저', r.title === '사진 설명 한 줄', JSON.stringify(r.title))
+  }
+
+  // ⑤ 전부 빈 경우 — 담긴 것이 없으면 저장 버튼 자체가 잠긴다(사양 유지).
+  //    최종 폴백 '메모 YYYY-MM-DD' 는 withSafeTitle 이 지킨다.
+  {
+    const r = await titleOf({})
+    check('⑤ 전부 비면 저장되지 않는다', r.title === null, JSON.stringify(r.title))
+    check('⑤ 자리말은 예시 문구', r.hint === '쇼츠 대본 - AI 활용법 3가지', r.hint)
+  }
+  {
+    // 공백뿐인 본문 + 파일 → 본문은 건너뛰고 파일 이름으로 (①이 빈 값이면 멈추지 않는다)
+    const r = await titleOf({ body: '   \n\n \t \n  ', file: realFile('붙임.pdf', 10) })
+    check('공백뿐인 본문은 건너뛴다', r.title === '붙임', JSON.stringify(r.title))
   }
 
   resetStore()
