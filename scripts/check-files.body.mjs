@@ -4,7 +4,7 @@ import {
   fileRejectReason, storageKeyFor, originalNameFromKey, parseFiles, joinFiles,
   formatBytes, fileIcon, filePathsOf, totalFileBytes, splitByKind,
   imagePathFromUrl, MAX_FILES, FILE_MAX_BYTES,
-  BLOCKED_EXTS, BLOCKED_FILE_MESSAGE, isBlockedFileName,
+  BLOCKED_EXTS, BLOCKED_FILE_MESSAGE, isBlockedFileName, randomKeyToken, safeExtOf,
   stripInvisible, saveErrorMessage, byteLength,
   SESSION_EXPIRED_MESSAGE, SAVE_FALLBACK_MESSAGE, DRAFT_DEBOUNCE_MS, DRAFT_MAX_BYTES
 } from '../src/supabase.js'
@@ -116,19 +116,52 @@ const realFile = (name, bytes = 8, type = 'application/octet-stream') =>
   check('5개 담긴 상태에서 1개 더 = 거부', full === `파일은 최대 ${MAX_FILES}개까지예요`, full)
 }
 
-// ── 4. 한글 파일명 왕복 ─────────────────────────────────────
+// ── 4. 저장 키는 ASCII 안전 문자만 ──────────────────────────
+//   Supabase Storage 의 키 허용 문자는 ASCII 뿐이다. 한글이 그대로 들어가면 400 InvalidKey 고,
+//   퍼센트 인코딩한 키도 '%' 가 허용 문자가 아니라 **똑같이 거부된다**(그래서 옛 폴백은
+//   발동해도 소용이 없었다). 이름은 키가 아니라 메타(files[].name)가 지고 다닌다.
+const KEY_SAFE = /^[A-Za-z0-9._\-/]+$/
 {
-  const names = ['2026학년도 계획서.hwp', '학생 명단(최종).xlsx', '보고서 v2 – 수정.pdf', 'ㄱㄴㄷ.txt']
+  const names = [
+    '2026학년도 계획서.hwp',
+    '학생 명단(최종).xlsx',
+    '보고서 v2 – 수정.pdf',
+    'ㄱㄴㄷ.txt',
+    '2026 지능형과학실 운영 계획(최종본).xlsx',
+    '회의록 🎉 정리.docx',
+    '이름만',
+    '표.한글확장자',
+    'a'.repeat(300) + '.pdf'
+  ]
   for (const name of names) {
-    const key = storageKeyFor('item-1', name, 1700000000000)
-    check(`저장 키 모양: ${name}`, key === `item-1/1700000000000_${name}`, key)
-    check(`평문 키 → 원본 이름: ${name}`, originalNameFromKey(key) === name, originalNameFromKey(key))
-    const enc = storageKeyFor('item-1', name, 1700000000000, true)
-    check(`인코딩 키에 비ASCII 없음: ${name}`, /^[\x20-\x7e]+$/.test(enc), enc)
-    check(`인코딩 키 → 원본 이름: ${name}`, originalNameFromKey(enc) === name, originalNameFromKey(enc))
+    const key = storageKeyFor('item-1', name, 1700000000000, 'ab12cd34')
+    check(`키에 ASCII 안전 문자만: ${name.slice(0, 24)}`, KEY_SAFE.test(key), key)
+    check(`키에 원본명이 들어가지 않는다: ${name.slice(0, 24)}`,
+      !key.includes(name) && !key.includes(name.slice(0, 6)), key)
+    check(`키 모양 {항목id}/{시각}_{랜덤8}.{확장자}: ${name.slice(0, 24)}`,
+      new RegExp('^item-1/1700000000000_ab12cd34(\\.[a-z0-9]{1,12})?$').test(key), key)
   }
-  const slashy = storageKeyFor('item-1', '폴더/이름.pdf', 1)
-  check('이름 속 / 는 폴더가 되지 않는다', slashy === 'item-1/1_폴더_이름.pdf', slashy)
+  check('한글 확장자는 키에서 떨어진다',
+    storageKeyFor('i', '표.한글확장자', 1, 'aaaaaaaa') === 'i/1_aaaaaaaa', storageKeyFor('i', '표.한글확장자', 1, 'aaaaaaaa'))
+  check('확장자 없는 이름은 확장자 없는 키',
+    storageKeyFor('i', 'README', 1, 'aaaaaaaa') === 'i/1_aaaaaaaa', storageKeyFor('i', 'README', 1, 'aaaaaaaa'))
+  check('대문자 확장자는 소문자로', storageKeyFor('i', 'A.PDF', 1, 'aaaaaaaa') === 'i/1_aaaaaaaa.pdf')
+  check('키 길이가 짧게 유지된다',
+    storageKeyFor('item-1', 'a'.repeat(300) + '.pdf', 1700000000000, 'ab12cd34').length < 60,
+    storageKeyFor('item-1', 'a'.repeat(300) + '.pdf', 1700000000000, 'ab12cd34').length)
+  const slashy = storageKeyFor('item-1', '폴더/이름.pdf', 1, 'aaaaaaaa')
+  check('이름 속 / 는 폴더가 되지 않는다', slashy === 'item-1/1_aaaaaaaa.pdf', slashy)
+  check('항목 id 도 안전 문자로 좁힌다',
+    KEY_SAFE.test(storageKeyFor('항목 1', 'a.pdf', 1, 'aaaaaaaa')), storageKeyFor('항목 1', 'a.pdf', 1, 'aaaaaaaa'))
+
+  // 랜덤 토큰 — 같은 밀리초에 같은 이름을 올려도 키가 갈린다(예전에는 이름이 갈라 주었다)
+  const tokens = new Set(Array.from({ length: 200 }, () => randomKeyToken()))
+  check('랜덤 토큰이 8자', [...tokens][0].length === 8, [...tokens][0])
+  check('랜덤 토큰은 소문자+숫자만', [...tokens].every((t) => /^[a-z0-9]{8}$/.test(t)))
+  check('200번 뽑아도 겹치지 않는다', tokens.size === 200, tokens.size)
+  check('같은 시각·같은 이름도 키가 갈린다',
+    storageKeyFor('i', 'a.pdf', 1) !== storageKeyFor('i', 'a.pdf', 1))
+
   check('한글 이름의 아이콘', fileIcon('계획서.hwp') === '📘' && fileIcon('표.xlsx') === '📊')
   // 확장자가 자유로워진 뒤로는 '모르는 확장자' 가 정상 입력이다 —
   // 아이콘이 없어 줄이 비어 보이는 일이 없어야 한다.
@@ -208,8 +241,9 @@ const imagesBucket = () => store.buckets['archive-images']
 
   check('올린 파일이 1개', filesBucket().size === 1, filesBucket().size)
   const key = [...filesBucket().keys()][0]
-  check('키가 {폴더}/{시각}_{원본명}', /^new-[^/]+\/\d+_2026학년도 계획서\.hwp$/.test(key), key)
-  check('키에서 원본 이름이 되돌아온다', originalNameFromKey(key) === '2026학년도 계획서.hwp')
+  check('키가 {폴더}/{시각}_{랜덤8}.{확장자}', /^new-[^/]+\/\d+_[a-z0-9]{8}\.hwp$/.test(key), key)
+  check('키에 ASCII 안전 문자만', KEY_SAFE.test(key), key)
+  check('키에 한글이 없다', !/[^\x20-\x7e]/.test(key), key)
   check('화면에 원본 이름', q(host, '.file-name')?.textContent === '2026학년도 계획서.hwp', q(host, '.file-name')?.textContent)
   check('화면에 용량', q(host, '.file-size')?.textContent === '1KB', q(host, '.file-size')?.textContent)
   check('화면에 아이콘', q(host, '.file-icon')?.textContent === '📘')
@@ -239,6 +273,74 @@ const imagesBucket = () => store.buckets['archive-images']
   check('저장 뒤 초안은 지워진다', window.sessionStorage.getItem('ma:draft:new') === null)
   check('경고 없이 저장됐다', savedWarn === null, savedWarn)
   act(() => { root.unmount() })
+}
+
+// ── 7-a. 한글·공백·괄호·이모지 이름 왕복 (InvalidKey 버그) ──
+//   키에는 한 글자도 새어 나가면 안 되고, 이름은 메타 → 화면 → 내려받기까지 원본 그대로여야 한다.
+{
+  resetStore()
+  window.sessionStorage.clear()
+  const names = [
+    '2026 지능형과학실 운영 계획(최종본).xlsx',
+    '회의록 🎉 정리 (2026-09-04).docx',
+    'ㄱㄴㄷ 목록 [초안] & 참고.pdf',
+    '이름만'
+  ]
+  const { host, root } = mount(React.createElement(ItemModal, {
+    item: null, categories: [], slots: [], userId: 'u1', onClose: () => {}, onSaved: () => {}
+  }))
+  await attach(host, names.map((n) => realFile(n, 321)))
+
+  check('네 개 모두 올라갔다', filesBucket().size === names.length, filesBucket().size)
+  const keys = [...filesBucket().keys()]
+  check('모든 키가 ASCII 안전 문자', keys.every((k) => KEY_SAFE.test(k)), keys)
+  check('어느 키에도 원본명 조각이 없다',
+    keys.every((k) => !/[^\x20-\x7e]/.test(k) && !/[()\[\]&🎉]/.test(k)), keys)
+  check('키가 서로 겹치지 않는다', new Set(keys).size === names.length, keys.length)
+
+  const shown = qa(host, '.file-name').map((el) => el.textContent)
+  check('화면에는 원본 이름 그대로', JSON.stringify(shown) === JSON.stringify(names), shown)
+
+  // 내려받기 — 서명 주소에 원본 이름을 실어 보낸다(다른 출처라 <a download> 만으로는 안 된다)
+  for (let i = 0; i < names.length; i += 1) {
+    await act(async () => { click(qa(host, '.file-open')[i]) })
+    const signed = store.calls.signed.at(-1)
+    check(`서명 주소 download 가 원본명: ${names[i].slice(0, 20)}`, signed?.download === names[i], signed?.download)
+    check(`서명 주소가 그 파일의 키를 가리킨다: ${names[i].slice(0, 20)}`,
+      keys.includes(signed?.path), signed?.path)
+  }
+  const anchors = qa(host, '.file-open')
+  check('내려받기 자리가 네 개', anchors.length === names.length, anchors.length)
+
+  await act(async () => { click(q(host, '.btn-primary')) })
+  const saved = store.rows.items[0]
+  check('저장된 메타에 원본 이름이 그대로',
+    JSON.stringify((saved?.files ?? []).map((f) => f.name)) === JSON.stringify(names),
+    (saved?.files ?? []).map((f) => f.name))
+  check('저장된 메타의 경로가 스토리지 키와 같다',
+    (saved?.files ?? []).every((f) => filesBucket().has(f.path)), (saved?.files ?? []).map((f) => f.path))
+  check('다시 읽어도 이름이 원본',
+    JSON.stringify(parseFiles(saved?.files).map((f) => f.name)) === JSON.stringify(names),
+    parseFiles(saved?.files).map((f) => f.name))
+  act(() => { root.unmount() })
+}
+
+// ── 7-a-2. 옛 키 형식 호환 — 이미 올라간 파일은 메타의 경로로 그대로 읽는다 ──
+{
+  const legacy = [
+    { path: 'item-9/1700000000000_report.pdf', name: 'report.pdf', size: 10 },
+    { path: 'item-9/1700000000001_2026 계획.hwp', name: '2026 계획.hwp', size: 20 }
+  ]
+  const parsed = parseFiles(legacy)
+  check('옛 키도 경로 그대로 읽는다',
+    parsed.map((f) => f.path).join() === legacy.map((f) => f.path).join(), parsed.map((f) => f.path))
+  check('옛 줄의 이름은 메타에서 온다', parsed.map((f) => f.name).join() === 'report.pdf,2026 계획.hwp')
+  check('옛 키 목록도 삭제 대상으로 잡힌다',
+    filePathsOf({ files: legacy }).length === 2, filePathsOf({ files: legacy }))
+  // 이름이 없는 옛 줄(경로 문자열만)은 예전처럼 키에서 이름을 되찾는다
+  check('이름 없는 옛 줄은 키에서 이름을 되찾는다',
+    parseFiles(['item-9/1700000000001_2026 계획.hwp'])[0].name === '2026 계획.hwp',
+    parseFiles(['item-9/1700000000001_2026 계획.hwp'])[0].name)
 }
 
 // ── 7-b. 화이트리스트 폐지: csv·md·json·확장자 없는 파일이 실제로 올라간다 ──

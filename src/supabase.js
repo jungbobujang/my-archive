@@ -198,15 +198,48 @@ export function fileRejectReason(file, currentCount = 0) {
   return null
 }
 
-// 저장 키: {항목id}/{타임스탬프}_{원본명}. 원본명을 그대로 둔다 — 나중에 스토리지를
-// 직접 열어 봤을 때 무엇인지 알아볼 수 있어야 한다. 폴더가 생기지 않게 / \ 만 바꾼다.
-// encoded 는 서버가 키를 거부했을 때 쓰는 물러설 자리다(uploadFile 참고).
-export function storageKeyFor(itemId, name, stamp = Date.now(), encoded = false) {
-  const base = String(name || 'file').replace(/[\/]/g, '_').trim() || 'file'
-  return `${itemId}/${stamp}_${encoded ? encodeURIComponent(base) : base}`
+// 저장 키: {항목id}/{타임스탬프}_{랜덤8자}.{확장자} — **원본 파일명을 키에 넣지 않는다.**
+//
+// Supabase Storage 의 키 문자 규칙은 ASCII 뿐이라 한글 이름이 그대로 들어가면 400
+// InvalidKey 로 거부된다. 예전에는 거부되면 퍼센트 인코딩해 한 번 물러섰는데,
+// **그 물러설 자리도 같은 이유로 막힌다** — '%' 역시 허용 문자가 아니라 인코딩한 키도
+// 똑같이 InvalidKey 다(라이브 확인). 그래서 물러서는 대신 처음부터 안전한 키를 쓴다.
+// 길이 초과·이중 인코딩 같은 사고 여지도 함께 사라진다.
+//
+// 사람이 읽을 이름은 items.files 메타(name)에 원본 그대로 남는다. 목록 표시도,
+// 내려받을 때 붙는 이름도 거기서 온다 — 키는 자리만 가리키면 된다.
+const KEY_TOKEN_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789'
+
+export function randomKeyToken(len = 8) {
+  const g = globalThis.crypto
+  const out = []
+  if (g && typeof g.getRandomValues === 'function') {
+    const buf = new Uint8Array(len)
+    g.getRandomValues(buf)
+    for (const b of buf) out.push(KEY_TOKEN_CHARS[b % KEY_TOKEN_CHARS.length])
+  } else {
+    for (let i = 0; i < len; i += 1) {
+      out.push(KEY_TOKEN_CHARS[Math.floor(Math.random() * KEY_TOKEN_CHARS.length)])
+    }
+  }
+  return out.join('')
 }
 
-// 키에서 원본 이름을 되찾는다. 퍼센트 인코딩된 키도 같은 이름으로 돌아온다.
+// 확장자도 키에 들어가므로 ASCII 로 좁힌다 — '.한글확장자' 같은 이름도 있다.
+// 남길 것이 없으면 확장자 없이 둔다(키에 이름이 없으니 잃을 것도 없다).
+export function safeExtOf(name) {
+  return extOfName(name).replace(/[^a-z0-9]/g, '').slice(0, 12)
+}
+
+export function storageKeyFor(itemId, name, stamp = Date.now(), token = randomKeyToken()) {
+  const folder = String(itemId ?? '').replace(/[^A-Za-z0-9._-]/g, '_') || 'item'
+  const ext = safeExtOf(name)
+  return `${folder}/${stamp}_${token}${ext ? `.${ext}` : ''}`
+}
+
+// 키에서 이름을 되찾는다. **옛 자료 전용**이다 — 예전 키에는 원본명이 들어 있었다.
+// 지금 만드는 키에는 이름이 없으므로, 이름은 언제나 메타(files[].name)에서 온다.
+// 메타에 이름이 없는 옛 줄(경로 문자열만 있는 경우)에만 이 함수가 쓰인다.
 export function originalNameFromKey(key) {
   const last = String(key ?? '').split('/').pop() ?? ''
   const raw = last.replace(/^\d+_/, '')
@@ -250,23 +283,20 @@ export function totalFileBytes(items) {
   return sum
 }
 
-// 파일 한 개 올리기. 원본명이 그대로 들어간 키를 먼저 쓰고, 서버가 키를 거부하면
-// (한글 등 비ASCII 를 막는 배포본이 있다) 퍼센트 인코딩한 키로 한 번만 물러선다.
-// 어느 쪽이든 화면에 보이는 이름(name)은 원본 그대로다.
+// 파일 한 개 올리기. 키는 처음부터 ASCII 안전한 값이라 물러설 자리가 필요 없다 —
+// 거부되면 그것은 키 문제가 아니라 진짜 오류(로그인·용량·연결)이므로 그대로 올려 보낸다.
+// 화면에 보이는 이름(name)은 원본 그대로 메타에 담아 돌려준다.
 export async function uploadFile(file, itemId) {
-  const stamp = Date.now()
+  const path = storageKeyFor(itemId, file.name)
   const opts = { contentType: file.type || 'application/octet-stream', upsert: false }
-  let path = storageKeyFor(itemId, file.name, stamp)
-  let { error } = await supabase.storage.from(FILE_BUCKET).upload(path, file, opts)
-  if (error && /invalid key/i.test(error.message ?? '')) {
-    path = storageKeyFor(itemId, file.name, stamp, true)
-    ;({ error } = await supabase.storage.from(FILE_BUCKET).upload(path, file, opts))
-  }
+  const { error } = await supabase.storage.from(FILE_BUCKET).upload(path, file, opts)
   if (error) throw error
   return { path, name: file.name, size: file.size }
 }
 
 // 비공개 버킷이라 받을 때마다 짧은 주소를 만든다. download 를 주면 원본 이름으로 저장된다.
+// 키에 이름이 없어진 뒤로는 **이 download 인자가 원본 이름을 되살리는 유일한 자리**다.
+// (<a download> 속성은 다른 출처의 주소에서는 무시된다 — 서명 주소가 바로 그 경우다.)
 export async function signedFileUrl(path, name) {
   const { data, error } = await supabase.storage
     .from(FILE_BUCKET)
