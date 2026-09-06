@@ -180,6 +180,15 @@ function putFile(path, size = 1024) {
     chips.map((c) => c.textContent).join())
   check('기본값은 7일', chips[1].classList.contains('chip-on'))
 
+  // 만들기 전에 미리 말해야 하는 두 줄. 링크를 보낸 뒤에 알면 늦다.
+  const caveats = qa(m.host, '.share-caveats li').map((li) => li.textContent)
+  check('안내: 이미지 주소에는 만료가 적용되지 않는다',
+    caveats.includes('※ 이미지가 포함된 항목은 이미지 주소에 만료가 적용되지 않습니다'),
+    caveats.join(' | '))
+  check('안내: 나중에 붙인 첨부는 새 링크가 필요하다',
+    caveats.includes('※ 링크 생성 후 추가한 첨부는 새 링크를 만들어야 표시됩니다'),
+    caveats.join(' | '))
+
   await act(async () => { click(chips[0]) })    // 1일
   const makeBtn = qa(m.host, '.share-backdrop .btn-primary').at(-1)
   await act(async () => { click(makeBtn) })
