@@ -157,6 +157,27 @@
 - **카테고리 관리** — 이름·아이콘·색(8색)·상위 카테고리 변경, 순환 참조 방지
 - **시간대 관리** — 이름·아이콘·순서
 
+### 항목 공유 링크 (열람 전용)
+
+항목 하나만, 로그인 없이 볼 수 있는 주소를 만듭니다. 항목을 열고 **🔗 공유 링크** 를 누르세요.
+
+- **유효기간 1일 / 7일 / 30일** — 고르고 [링크 만들기] 를 누르면 `/s/{토큰}` 주소가 만들어지고
+  곧바로 복사됩니다. 토큰은 uuid(122비트 난수)라 찍어서 맞힐 수 없습니다
+- **받는 사람은 읽기만 합니다** — 제목·본문·태그·이미지·링크·첨부 파일 내려받기까지.
+  편집·삭제·다른 항목으로 가는 길은 없고, 아래에 “열람 전용 링크입니다” 가 붙습니다
+- **만료·회수 판정은 전부 DB 안에서 합니다.** 만료된 링크에는 항목 내용이 **응답에 실리지도**
+  않습니다 — 화면을 가리는 것이 아닙니다. `items` 의 RLS 는 그대로라, 비로그인 조회는 언제나 0행이고
+  `shares` 표도 anon 에게는 잠겨 있습니다(토큰을 알아도 못 읽습니다). 공유 항목을 꺼내는 길은
+  `share_view(token)` 함수 하나뿐입니다
+- **회수** — 설정 → 공유 중인 링크에서 [회수]. 유효기간이 남아 있어도 즉시 끊깁니다
+- **첨부 파일** — 비공개 버킷이라, 링크를 만드는 순간 **유효기간과 같은 수명**의 서명 주소를
+  만들어 담아 둡니다. 영구 공개 주소는 나가지 않습니다
+- **자리비움 잠금과 무관합니다** — 받는 사람에게는 PIN 이 없고, 공유 화면은 앱 본체를 그리지 않습니다
+
+> 링크를 만든 **뒤에** 항목에 파일을 더 붙이면 그 파일은 이미 만든 링크에 나타나지 않습니다
+> (서명 주소를 만들 때 굳혔기 때문입니다). 그때는 링크를 다시 만드세요.
+> 제목·본문·이미지는 볼 때마다 최신 값을 읽습니다.
+
 ### 자리비움 잠금
 
 자리를 뜬 사이 화면을 가리는 기능입니다. **기본은 꺼져 있고, PIN 을 걸어야 켤 수 있습니다.**
@@ -195,9 +216,9 @@ PIN 은 평문으로 저장하지 않고 PBKDF2(SHA-256, 20만 회, 임의 소�
 
 1. [supabase.com](https://supabase.com) 에서 새 프로젝트를 만듭니다.
 2. 왼쪽 메뉴 **SQL Editor** → `supabase/setup.sql` 내용 전체를 붙여넣고 **Run**.
-   - 테이블 4개(categories / time_slots / items / item_categories), RLS 정책,
-     인덱스, 이미지 버킷(archive-images), 파일 버킷(archive-files, 비공개)이
-     한 번에 만들어집니다.
+   - 테이블 5개(categories / time_slots / items / item_categories / shares), RLS 정책,
+     인덱스, 이미지 버킷(archive-images), 파일 버킷(archive-files, 비공개),
+     공유 열람 함수 `share_view` 가 한 번에 만들어집니다.
    - 이 파일 하나면 됩니다. 여러 번 다시 실행해도 안전합니다.
 3. **Authentication → Users → Add user** 에서 본인 계정(이메일/비밀번호)을 직접 만듭니다.
    - 계정을 만드는 순간 기본 카테고리 4종(아이디어 / 유튜브 대본 / 이미지 / 기타 메모)과
@@ -260,6 +281,7 @@ my-archive/
 │   ├── generate-icons.mjs # 의존성 없이 PNG 아이콘 생성 (node scripts/generate-icons.mjs)
 │   ├── check-modals.mjs   # npm run check        모달 동작 (jsdom)
 │   ├── check-files.mjs    # npm run check:files  파일 첨부 (jsdom + 가짜 Supabase)
+│   ├── check-share.mjs    # npm run check:share  공유 링크 (유효/만료/회수를 응답으로 확인)
 │   ├── fake-supabase.mjs  # 위 점검이 끼워 넣는 in-memory 클라이언트
 │   ├── check-mobile.mjs   # npm run check:mobile 375px 실측 (puppeteer)
 │   └── mobile-harness/    # 위 점검이 띄우는 모달·잠금 화면 단독 화면
@@ -271,23 +293,26 @@ my-archive/
 │   └── setup.sql          # 테이블 / RLS / 버킷
 └── src/
     ├── main.jsx
-    ├── App.jsx            # 인증 게이트
+    ├── App.jsx            # 인증 게이트 + 작은 라우터 (/ · /pricing · /s/{토큰})
     ├── supabase.js        # 클라이언트 + 공용 순수 함수
     ├── theme.js           # 라이트/다크 테마
     ├── lock.js            # 자리비움 잠금 (기기 설정 + PIN 해시)
+    ├── share.js           # 공유 링크 (토큰 주소·유효기간·서명 주소·열람 호출)
     ├── hooks.js           # useEscapeKey · useIdleLock
     ├── registerSW.js
     ├── styles.css         # 색 토큰(라이트/다크) + 전체 스타일
     └── components/
         ├── Login.jsx
         ├── Pricing.jsx        # /pricing 요금제 초안 (결제 연동 없음)
-        ├── Settings.jsx       # 테마 / 자리비움 잠금 / 플랜 / 계정
+        ├── Settings.jsx       # 테마 / 잠금 / 공유 중인 링크 / 플랜 / 계정
+        ├── SharePage.jsx      # /s/{토큰} 받는 사람이 보는 열람 전용 화면
+        ├── ShareDialog.jsx    # 유효기간을 고르고 링크를 만드는 작은 창
         ├── LockScreen.jsx     # 잠금 화면 (불투명 가림막 + PIN)
         ├── Skeleton.jsx       # 로딩 자리 표시자
         ├── Archive.jsx        # 메인 화면 (탭·검색·필터·목록)
         ├── Today.jsx          # 오늘 대시보드
         ├── ItemCard.jsx       # 목록 카드 (memo)
-        ├── ItemModal.jsx      # 생성/수정/삭제 (여러 링크 일괄 저장 포함)
+        ├── ItemModal.jsx      # 생성/수정/삭제 (여러 링크 일괄 저장·공유 링크 포함)
         ├── CategoryManager.jsx
         ├── SlotManager.jsx    # 시간대
         ├── MindMap.jsx

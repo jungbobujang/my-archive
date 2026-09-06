@@ -9,7 +9,10 @@
  * 버전을 올리면 옛 캐시는 activate 에서 통째로 지워진다.
  */
 
-const VERSION = 'v2'
+// v3 — 공유 링크(/s/{토큰}) 화면이 들어오면서 셸 번들이 바뀌었다.
+// 문서 요청은 원래 네트워크 우선이라 온라인이면 새 index.html 을 받지만,
+// 버전을 올려 두면 옛 셸·옛 청크가 캐시에 남아 있다가 오프라인에서 되살아나는 일이 없다.
+const VERSION = 'v3'
 const SHELL_CACHE = `archive-shell-${VERSION}`
 const RUNTIME_CACHE = `archive-runtime-${VERSION}`
 const KEEP = [SHELL_CACHE, RUNTIME_CACHE]

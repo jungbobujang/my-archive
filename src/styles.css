@@ -844,6 +844,10 @@ a:focus-visible {
   justify-content: space-between;
   gap: 8px;
   margin-top: 4px;
+  /* 수정 모달의 아래쪽에는 [삭제] [🔗 공유 링크] [취소] [저장] 넷이 선다.
+     좁은 화면에서 한 줄에 안 들어가면 넘긴다 — 넘치면 버튼이 화면 밖으로 잘린다. */
+  flex-wrap: wrap;
+  row-gap: 10px;
 }
 .modal-foot-right { display: flex; gap: 8px; margin-left: auto; }
 
@@ -1914,3 +1918,136 @@ a.card-thumb { cursor: pointer; }
 .lock-toggle span { display: flex; flex-direction: column; gap: 2px; font-size: 13.5px; }
 .lock-toggle input { width: 18px; height: 18px; flex: none; accent-color: var(--accent); }
 .set-error { margin: 0; font-size: 12.5px; color: var(--danger); }
+
+/* ── 공유 링크 ──────────────────────────────────────────────
+   소유자 쪽(모달 안 작은 창 · 설정의 목록)과 받는 사람 쪽(공유 페이지)이
+   함께 있다. 받는 사람은 앱을 처음 보는 사람이므로, 화면에 누를 것을 두지
+   않는다 — 읽는 것 말고 할 일이 없는 화면이다. */
+
+.btn-share { font-size: 13px; white-space: nowrap; }
+
+/* 공유 창은 항목 모달 위에 겹친다. 배경이 두 번 깔리면 너무 어두워져
+   scrim 을 옅게 준다. */
+.share-backdrop { background: rgba(28, 30, 25, 0.3); }
+.modal-narrow { max-width: 420px; }
+
+.share-lead { margin: 0; font-size: 13.5px; color: var(--ink-soft); line-height: 1.6; }
+
+/* 만들기 전에 읽어야 할 두 줄. 눈에 띄되 겁을 주지는 않게 — 작은 회색 글씨다. */
+.share-caveats {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ink-faint);
+  line-height: 1.5;
+}
+.share-made { display: flex; flex-direction: column; gap: 6px; }
+
+.share-url {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--ink);
+  /* 16px 미만이면 iOS 가 눌렀을 때 화면을 확대한다 */
+  font-size: 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.share-revoked {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* ── 설정 › 공유 중인 링크 ─────────────────────────────────── */
+.share-list { list-style: none; margin: 4px 0 10px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.share-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.share-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.share-row-title {
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-row-when { font-size: 12px; color: var(--ink-faint); }
+
+/* ── 받는 사람이 보는 화면 ─────────────────────────────────── */
+.share-page { max-width: 760px; }
+.share-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 22px;
+  margin-top: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+}
+.share-title { margin: 0; font-size: 22px; font-weight: 650; line-height: 1.35; word-break: break-word; }
+
+/* 눌러도 아무 일이 없는 칩. 공유 화면의 태그는 필터가 아니라 표시다. */
+.chip-static { cursor: default; }
+
+.share-body {
+  font-size: 15px;
+  line-height: 1.75;
+  /* 줄바꿈과 들여쓰기를 쓴 그대로 보여 준다 (대본이 들어오는 자리다) */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.share-images { display: flex; flex-direction: column; gap: 10px; }
+.share-image { padding: 0; border: none; background: none; cursor: zoom-in; }
+.share-image img {
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-lg);
+  display: block;
+}
+
+.share-links a { word-break: break-all; }
+.share-files { margin-top: 2px; }
+
+.share-foot {
+  margin: 14px 0 24px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--ink-faint);
+}
+
+/* 만료·회수·없는 토큰. 여기에는 항목 내용이 아예 오지 않았다. */
+.share-dead {
+  max-width: 380px;
+  padding: 30px 24px;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+}
+.share-dead-mark { font-size: 34px; line-height: 1; filter: grayscale(1); opacity: .5; }
+.share-dead h1 { margin: 12px 0 6px; font-size: 19px; font-weight: 650; }
+.share-dead p { margin: 0; font-size: 13.5px; color: var(--ink-soft); line-height: 1.6; }
+.share-dead-sub { margin-top: 8px !important; color: var(--ink-faint) !important; font-size: 12.5px !important; }
+
+@media (max-width: 520px) {
+  .share-card { padding: 16px; border-radius: var(--radius-lg); }
+  .share-title { font-size: 19px; }
+  .share-row { flex-wrap: wrap; }
+  .share-row-main { flex-basis: 100%; }
+}

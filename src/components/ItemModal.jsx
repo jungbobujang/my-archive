@@ -16,6 +16,7 @@ import {
 } from '../supabase.js'
 import { useEscapeKey, confirmDiscard, draftKeyFor, readDraft, writeDraft, clearDraft } from '../hooks.js'
 import { useOptionalToast } from './Toast.jsx'
+import ShareDialog from './ShareDialog.jsx'
 
 // youtu.be/abc123 형태로 줄인다.
 // 물음표 뒤(?v=...)까지 남기는 이유: 유튜브 링크는 경로가 전부 /watch 라
@@ -102,6 +103,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   const [uploading, setUploading] = useState(0) // 올리는 중인 장수
   const [dragOver, setDragOver] = useState(false)
   const [zoom, setZoom] = useState(null)         // 크게 볼 이미지 URL
+  const [shareOpen, setShareOpen] = useState(false) // 공유 링크 창 (수정 중일 때만 연다)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const fileRef = useRef(null)
@@ -268,8 +270,14 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     cleanupAndClose()
   }
 
-  // 크게 보기가 떠 있으면 Esc 는 그것부터 닫는다 (모달까지 같이 닫히면 쓴 내용이 날아간다)
-  useEscapeKey(() => { if (zoom) setZoom(null); else closeFromEscape() })
+  // 위에 덮인 것이 있으면 Esc 는 그것부터 닫는다 (모달까지 같이 닫히면 쓴 내용이 날아간다).
+  // 크게 보기 → 공유 창 → 모달 차례. 겹친 창들은 Esc 를 스스로 듣지 않는다 —
+  // 각자 들으면 한 번 누를 때 두 겹이 같이 닫힌다.
+  useEscapeKey(() => {
+    if (zoom) setZoom(null)
+    else if (shareOpen) setShareOpen(false)
+    else closeFromEscape()
+  })
 
   // 되살린 초안을 버리고 처음 상태로 되돌린다.
   // 되돌리면 이번에 올린 이미지·파일은 화면에서 사라지므로 스토리지에서도 지운다 —
@@ -1107,6 +1115,16 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
           {isEdit && (
             <button className="btn-danger" onClick={handleDelete} disabled={busy}>삭제</button>
           )}
+          {/* 새 항목에는 링크를 걸 대상이 아직 없다(저장돼야 id 가 생긴다) */}
+          {isEdit && (
+            <button
+              type="button"
+              className="btn-ghost btn-share"
+              onClick={() => setShareOpen(true)}
+              disabled={busy}
+              title="로그인 없이 이 항목만 볼 수 있는 주소를 만듭니다"
+            >🔗 공유 링크</button>
+          )}
           <div className="modal-foot-right">
             <button className="btn-ghost" onClick={cleanupAndClose} disabled={busy}>취소</button>
             <button
@@ -1125,6 +1143,15 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
           </div>
         </div>
       </div>
+
+      {shareOpen && (
+        <ShareDialog
+          item={item}
+          userId={userId}
+          dirty={dirty}
+          onClose={() => setShareOpen(false)}
+        />
+      )}
 
       {zoom && (
         <div

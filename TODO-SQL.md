@@ -94,6 +94,51 @@ where id = 'archive-files';
 
 ---
 
+### 🔴 항목 공유 링크 (share-link) — **실행 필요**
+
+`supabase/setup.sql` 전체를 SQL Editor 에 다시 붙여넣고 Run 하세요 (9절이 새로 생겼습니다).
+여러 번 실행해도 안전합니다. 이번에 늘어난 것은 표 하나와 함수 하나입니다.
+
+```sql
+-- ① 공유 토큰 표. id 가 곧 토큰이다(uuid = 122비트 난수).
+create table if not exists public.shares (
+  id uuid primary key default gen_random_uuid(),
+  item_id uuid not null references public.items(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  expires_at timestamptz not null,
+  revoked boolean not null default false,
+  files jsonb not null default '[]'::jsonb,   -- 만들 때 굳혀 둔 서명 주소
+  created_at timestamptz default now()
+);
+
+create index if not exists shares_user_created_idx on public.shares (user_id, created_at desc);
+create index if not exists shares_item_idx on public.shares (item_id);
+
+alter table public.shares enable row level security;
+
+-- 소유자만. anon 정책은 **일부러 두지 않는다** — 토큰을 알아도 이 표는 못 읽는다.
+drop policy if exists "own shares all" on public.shares;
+create policy "own shares all" on public.shares
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- ② 열람 함수. 공유 항목을 꺼내는 **유일한 길**이고, 만료·회수 판정이 여기서 끝난다.
+--    본문은 setup.sql 의 9) 절에 있습니다 (여기서는 뼈대만).
+create or replace function public.share_view(p_token uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$ ... $$;
+
+revoke all on function public.share_view(uuid) from public;
+grant execute on function public.share_view(uuid) to anon, authenticated;
+```
+
+**실행 전에는** 공유 링크만 동작하지 않습니다. 링크를 만들려고 하면
+`공유 링크 표가 아직 없어요 — supabase/setup.sql 을 실행해 주세요` 라고 알리고,
+설정의 '공유 중인 링크' 칸은 통째로 숨습니다. **나머지 기능은 그대로 돕니다.**
+
+`items` 의 RLS 는 손대지 않았습니다 — 비로그인 조회는 예전처럼 0행입니다.
+공유는 RLS 를 여는 방식이 아니라, security definer 함수 하나를 여는 방식입니다.
+
+---
+
 ### 그 밖
 
 **없습니다.**
