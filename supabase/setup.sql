@@ -19,6 +19,7 @@
 --   7) 파일 스토리지 버킷 archive-files (비공개)
 --   8) updated_at 자동 갱신
 --   9) 신규 가입자 기본 카테고리 4종 + 시간대 5종 자동 생성
+--  10) 항목 공유 링크 shares + 열람 함수 share_view (로그인 없이 한 항목만 보기)
 -- ============================================================
 
 
@@ -319,6 +320,104 @@ begin
   end loop;
 end;
 $$;
+
+
+-- ============================================================
+-- 9) 항목 공유 링크 (열람 전용)
+--
+--    이 앱에는 서버가 없다. 브라우저가 anon 키로 직접 붙으므로, 만료 검사를
+--    프론트에서 하면 그것은 검사가 아니라 장식이다(데이터는 이미 브라우저에
+--    와 있고, 화면만 지우면 보인다). 그래서 판정을 전부 DB 안으로 옮긴다.
+--
+--    · items 의 RLS 는 그대로 auth.uid() = user_id 다. 비로그인 조회는 언제나 0행.
+--    · shares 도 소유자만 읽는다. **토큰을 알아도** anon 은 이 표에서 한 줄도 못 읽는다
+--      — expires_at 을 받아 와서 프론트가 비교하는 구조를 원천적으로 막기 위해서다.
+--    · 공유 항목을 꺼내는 유일한 길은 share_view(token) 하나뿐이고, 그 안에서
+--      DB 가 회수·만료를 본다. 만료된 토큰에는 항목 내용이 응답에 실리지 않는다.
+--
+--    files 열에는 '만들 때 굳혀 둔 서명 주소' 가 들어간다. archive-files 는 비공개
+--    버킷이라 anon 이 열 수 없고, storage 정책에는 우리 토큰을 넘길 자리가 없다
+--    (커스텀 헤더는 storage-api 를 거쳐 Postgres 까지 오지 않는다). 그래서 링크를
+--    만드는 순간 소유자가 유효기간과 **같은 수명**으로 서명한 주소를 여기 담아 둔다.
+--    share_view 는 그것을 '아직 유효할 때만' 함께 돌려준다.
+-- ============================================================
+create table if not exists public.shares (
+  -- id 가 곧 토큰이다. uuid v4 는 122비트 난수라 찍어서 맞힐 수 없다.
+  id uuid primary key default gen_random_uuid(),
+  item_id uuid not null references public.items(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  expires_at timestamptz not null,
+  -- 회수. 행을 지우지 않는 이유는, 지우면 '없는 토큰' 과 구분이 안 되기 때문이다.
+  revoked boolean not null default false,
+  -- [{ "name": "...", "size": 0, "url": "서명 주소" }]
+  files jsonb not null default '[]'::jsonb,
+  created_at timestamptz default now()
+);
+
+create index if not exists shares_user_created_idx
+  on public.shares (user_id, created_at desc);
+create index if not exists shares_item_idx
+  on public.shares (item_id);
+
+alter table public.shares enable row level security;
+
+-- 소유자만. anon 정책은 **일부러 두지 않는다** (아래 함수가 유일한 통로다).
+drop policy if exists "own shares all" on public.shares;
+create policy "own shares all" on public.shares
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+
+-- 열람 함수. security definer 라 RLS 를 넘어서 items 를 읽지만,
+-- 넘겨주는 열을 여기서 하나씩 적어 둔다 — user_id 나 휴지통 상태 같은 것은 나가지 않는다.
+create or replace function public.share_view(p_token uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  s public.shares%rowtype;
+  it public.items%rowtype;
+begin
+  select * into s from public.shares where id = p_token;
+  if not found then
+    return jsonb_build_object('ok', false, 'reason', 'not_found');
+  end if;
+
+  if s.revoked then
+    return jsonb_build_object('ok', false, 'reason', 'revoked');
+  end if;
+
+  -- 만료 판정은 **서버 시각**으로 한다. 받는 사람 시계를 되돌려도 소용없다.
+  if s.expires_at <= now() then
+    return jsonb_build_object('ok', false, 'reason', 'expired');
+  end if;
+
+  -- 휴지통으로 보낸 항목은 공유도 끊긴다 (지운 글이 링크로 계속 보이면 안 된다).
+  select * into it from public.items where id = s.item_id and deleted_at is null;
+  if not found then
+    return jsonb_build_object('ok', false, 'reason', 'not_found');
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'expires_at', s.expires_at,
+    'files', s.files,
+    'item', jsonb_build_object(
+      'title', it.title,
+      'content', it.content,
+      'tags', to_jsonb(coalesce(it.tags, '{}'::text[])),
+      'link_url', it.link_url,
+      'image_url', it.image_url,
+      'created_at', it.created_at,
+      'updated_at', it.updated_at
+    )
+  );
+end;
+$$;
+
+revoke all on function public.share_view(uuid) from public;
+grant execute on function public.share_view(uuid) to anon, authenticated;
 
 
 -- ============================================================

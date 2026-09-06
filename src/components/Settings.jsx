@@ -11,6 +11,10 @@ import {
   PIN_LENGTH, IDLE_CHOICES, cryptoReady, isValidPin,
   savePin, clearPin, readLockConfig, writeEnabled, writeIdleMinutes
 } from '../lock.js'
+import {
+  listShares, revokeShare, shareUrlFor, formatWhen, remainingLabel, copyText,
+  isMissingShareSchema
+} from '../share.js'
 
 export default function Settings({
   email, userId, themePref, onThemeChange, onOpenPricing, onLockChanged, onClose
@@ -96,6 +100,8 @@ export default function Settings({
 
         <LockSettings userId={userId} onChanged={onLockChanged} />
 
+        <ShareList />
+
         <section className="set-section">
           <h3 className="set-head">플랜</h3>
           <div className="set-row">
@@ -117,6 +123,103 @@ export default function Settings({
         </section>
       </div>
     </div>
+  )
+}
+
+// 공유 중인 링크.
+//
+// 살아 있는 것만 보여 준다(회수·만료된 것은 뺀다) — '지금 누가 볼 수 있는가' 를
+// 한눈에 보는 자리라, 죽은 링크가 섞이면 그 목적이 흐려진다.
+// 회수는 여기서 즉시 반영한다. 되돌릴 수 없으므로 한 번 물어본다.
+//
+// 표가 아직 없는 DB(setup.sql 미실행)에서는 이 칸을 통째로 숨긴다 — 저장소 게이지와
+// 같은 규칙이다. 빈 목록으로 보이면 '공유한 적 없음' 으로 잘못 읽힌다.
+function ShareList() {
+  const [rows, setRows] = useState(null)   // null = 아직/쓸 수 없음
+  const [busyId, setBusyId] = useState(null)
+  const [copiedId, setCopiedId] = useState(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!supabase) return
+    let alive = true
+    ;(async () => {
+      try {
+        const list = await listShares()
+        if (alive) setRows(list)
+      } catch (err) {
+        // 표가 없으면 조용히 숨긴다. 그 밖의 오류는 한 줄로 알린다.
+        if (!isMissingShareSchema(err)) {
+          console.warn('[설정] 공유 링크 목록을 읽지 못했습니다:', err)
+          if (alive) { setRows([]); setError('공유 링크 목록을 읽지 못했어요') }
+        }
+      }
+    })()
+    return () => { alive = false }
+  }, [])
+
+  if (rows === null) return null
+
+  async function revoke(row) {
+    if (!window.confirm(`"${row.title}" 링크를 회수할까요? 받은 사람은 바로 볼 수 없게 됩니다.`)) return
+    setBusyId(row.id)
+    try {
+      await revokeShare(row.id)
+      setRows((prev) => prev.filter((r) => r.id !== row.id))
+      setError('')
+    } catch (err) {
+      console.error('[설정] 회수하지 못했습니다:', err)
+      setError('회수하지 못했어요. 연결 상태를 확인해 주세요')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function copy(row) {
+    const ok = await copyText(shareUrlFor(row.id))
+    setCopiedId(ok ? row.id : null)
+    if (!ok) setError('복사하지 못했어요')
+  }
+
+  return (
+    <section className="set-section">
+      <h3 className="set-head">공유 중인 링크</h3>
+      {rows.length === 0 ? (
+        <p className="set-hint">
+          공유 중인 링크가 없어요. 항목을 열고 <b>🔗 공유 링크</b> 를 누르면 만들 수 있습니다.
+        </p>
+      ) : (
+        <ul className="share-list">
+          {rows.map((r) => (
+            <li className="share-row" key={r.id}>
+              <span className="share-row-main">
+                <span className="share-row-title">{r.title}</span>
+                <span className="share-row-when">
+                  {formatWhen(r.expires_at)} 까지 · {remainingLabel(r.expires_at)}
+                </span>
+              </span>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => copy(r)}
+                aria-label={`${r.title} 링크 복사`}
+              >{copiedId === r.id ? '복사됨 ✓' : '복사'}</button>
+              <button
+                type="button"
+                className="btn-ghost btn-sm cm-del"
+                onClick={() => revoke(r)}
+                disabled={busyId === r.id}
+                aria-label={`${r.title} 링크 회수`}
+              >회수</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {error && <p className="set-error">{error}</p>}
+      <p className="set-hint">
+        회수하면 그 주소는 즉시 열리지 않습니다. 유효기간이 지난 링크는 목록에서 사라집니다.
+      </p>
+    </section>
   )
 }
 
