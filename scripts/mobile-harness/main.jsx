@@ -24,6 +24,13 @@ const attachedFiles = [
   { path: 'it1/1700000000003_실험 안전 수칙.pdf', name: '실험 안전 수칙.pdf', size: 940 }
 ]
 
+// 순서 바꾸기 점검용 — 이미지 3장 + 파일 3개. 이미지는 바깥으로 나가지 않게
+// data: URL 을 쓴다 (점검이 연결 상태에 따라 흔들리면 안 된다).
+const px = (fill) => 'data:image/svg+xml;utf8,' + encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="${fill}"/></svg>`
+)
+const reorderImages = [px('#c33'), px('#3c3'), px('#33c')]
+
 const item = (mode === 'new' || mode === 'multi') ? null : {
   id: 'it1',
   title: '쇼츠 대본 - AI 활용법 3가지',
@@ -39,8 +46,9 @@ const item = (mode === 'new' || mode === 'multi') ? null : {
   due_date: null,
   slot_id: null,
   category_id: 'c1',
-  files: mode === 'files' ? attachedFiles : []
+  files: (mode === 'files' || mode === 'reorder') ? attachedFiles : []
 }
+if (mode === 'reorder') item.image_url = reorderImages.join(String.fromCharCode(10))
 
 if (mode === 'multi') {
   sessionStorage.setItem('ma:draft:new', JSON.stringify({

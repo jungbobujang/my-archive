@@ -715,6 +715,57 @@ a:focus-visible {
   background: rgba(0, 0, 0, .55);
   border-top-right-radius: var(--radius);
 }
+/* ── 순서 바꾸기 ──────────────────────────────────────────────────────
+   끌기 중에만 스크롤을 막는다. touch-action 은 손가락이 닿는 순간에 정해져서,
+   길게 누른 뒤에 값을 바꿔도 이미 시작된 제스처에는 안 먹는다 — 그래서 실제 차단은
+   reorder.js 가 non-passive touchmove 로 하고, 여기서는 보이는 것만 맡는다.
+   🔴 평소에는 touch-action 을 건드리지 않는다. 썸네일 줄에 none 을 걸어 두면
+      그 위에서는 화면을 아예 못 넘긴다 — 순서를 바꿀 일이 없는 사람에게는 고장이다. */
+.reorder-grip {
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .58);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: grab;
+  opacity: 0;
+  transition: opacity .12s;
+}
+.img-thumb:hover .reorder-grip,
+.reorder-grip:focus-visible { opacity: 1; }
+.reorder-grip:active { cursor: grabbing; }
+
+/* 끌고 있는 것은 옅게, 놓일 자리는 테두리로 알린다.
+   🔴 끌리는 것을 감추지 않는다. 사라지면 몇 개짜리 목록인지 순간 흔들려 자리를 못 센다. */
+.reorder-drag { opacity: .45; }
+.reorder-over { outline: 2px solid var(--accent); outline-offset: -2px; }
+.img-strip.reorder-on,
+.file-list.reorder-on { cursor: grabbing; user-select: none; }
+.file-row.reorder-drag { background: var(--bg); }
+
+/* 파일 줄의 ▲▼ — 세로 목록에서는 버튼이 끌기보다 정확하다 */
+.file-move { flex: none; display: flex; flex-direction: column; gap: 1px; }
+.file-move-btn {
+  width: 20px;
+  height: 15px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1;
+  cursor: pointer;
+}
+.file-move-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.file-move-btn:disabled { opacity: .3; cursor: default; }
+
 .img-thumb-busy {
   display: flex;
   flex-direction: column;
@@ -1797,6 +1848,12 @@ a.card-thumb { cursor: pointer; }
   /* 썸네일 스트립: 지우기 X 와 파일 고르기가 손가락 크기여야 한다.
      스트립 자체는 가로 스크롤이라 장수가 늘어도 폭이 넘치지 않는다. */
   .img-thumb { width: 76px; height: 76px; }
+  /* 폰에서는 손잡이를 늘 보여 준다 — hover 가 없어서 감춰 두면 있는 줄도 모른다 */
+  .reorder-grip { opacity: 1; width: 26px; height: 26px; font-size: 13px; }
+  .reorder-grip::after { content: ''; position: absolute; inset: -6px; }
+  .file-move-btn { width: 30px; height: 20px; font-size: 9px; }
+  .file-move-btn::after { content: ''; position: absolute; inset: -4px -2px; }
+  .file-move { position: relative; }
   .img-thumb-x { width: 28px; height: 28px; font-size: 13px; }
   /* 시각 크기는 그대로 두고 손가락 범위만 넓힌다(.star·.check 와 같은 방식).
      44px 를 다 주면 76px 썸네일의 3분의 1을 덮어 '눌러서 크게 보기'를 가로챈다.

@@ -3,11 +3,12 @@ import { JSDOM, VirtualConsole } from 'jsdom'
 import {
   fileRejectReason, storageKeyFor, originalNameFromKey, parseFiles, joinFiles,
   formatBytes, fileIcon, filePathsOf, totalFileBytes, splitByKind,
-  imagePathFromUrl, MAX_FILES, FILE_MAX_BYTES,
+  imagePathFromUrl, parseImages, MAX_FILES, FILE_MAX_BYTES,
   BLOCKED_EXTS, BLOCKED_FILE_MESSAGE, isBlockedFileName, randomKeyToken, safeExtOf,
   stripInvisible, saveErrorMessage, byteLength,
   SESSION_EXPIRED_MESSAGE, SAVE_FALLBACK_MESSAGE, DRAFT_DEBOUNCE_MS, DRAFT_MAX_BYTES
 } from '../src/supabase.js'
+import { moveItem, LONG_PRESS_MS, DRAG_THRESHOLD_PX, CANCEL_MOVE_PX } from '../src/reorder.js'
 import { store, resetStore } from './fake-supabase.mjs'
 
 // a.click() 으로 내려받기를 흉내 낼 때 jsdom 이 '이동은 구현 안 됨' 을 찍는다. 판정과 무관하다.
@@ -1204,6 +1205,142 @@ const imagesBucket = () => store.buckets['archive-images']
   act(() => { root.unmount() })
   window.sessionStorage.clear()
   resetStore()
+}
+
+// ── 13. 순서 바꾸기 — 이미지·파일 ────────────────────────────
+//   배열 순서가 곧 표시 순서다(스키마 변경 없음). 여기서 재는 것은 셋:
+//   ① moveItem 이 정확히 한 칸씩 옮기는가 ② 화면에서 바꾼 순서가 저장까지 가는가
+//   ③ 순서만 바꿔도 '바뀜'(dirty)으로 잡히는가.
+{
+  const base = ['a', 'b', 'c', 'd']
+  check('moveItem: 앞으로', moveItem(base, 2, 0).join() === 'c,a,b,d', moveItem(base, 2, 0).join())
+  check('moveItem: 뒤로', moveItem(base, 0, 3).join() === 'b,c,d,a', moveItem(base, 0, 3).join())
+  check('moveItem: 제자리는 그대로', moveItem(base, 1, 1).join() === base.join())
+  check('moveItem: 범위를 넘으면 끝으로 붙인다', moveItem(base, 0, 99).join() === 'b,c,d,a', moveItem(base, 0, 99).join())
+  check('moveItem: 원본을 건드리지 않는다', base.join() === 'a,b,c,d', base.join())
+  check('moveItem: 잘못된 자리는 그대로', moveItem(base, -1, 2).join() === base.join())
+  check('길게 누르기 300ms', LONG_PRESS_MS === 300, LONG_PRESS_MS)
+  check('마우스는 4px 움직여야 끌기', DRAG_THRESHOLD_PX === 4, DRAG_THRESHOLD_PX)
+  check('터치는 10px 먼저 움직이면 스크롤', CANCEL_MOVE_PX === 10, CANCEL_MOVE_PX)
+}
+
+// ── 13-a. 이미지 3장 순서 뒤집기 → 저장 → 재열람 → 카드 표지 ──
+{
+  resetStore()
+  window.sessionStorage.clear()
+  const item = {
+    id: 'i-order', title: '순서', content: '', link_url: '', tags: [],
+    image_url: 'https://x/1.png\nhttps://x/2.png\nhttps://x/3.png', files: []
+  }
+  // 수정 저장은 update 라 행이 미리 있어야 한다 (11번 검사와 같은 방식)
+  store.rows.items.push({ id: 'i-order', title: '순서', image_url: item.image_url, files: [] })
+  const { host, root } = mount(React.createElement(ItemModal, {
+    item, categories: [], slots: [], userId: 'u1', onClose: () => {}, onSaved: () => {}
+  }))
+
+  const grips = () => qa(host, '.img-grip')
+  check('이미지 3장에 손잡이 3개', grips().length === 3, grips().length)
+
+  // 방향키로 옮긴다 (끌기와 같은 moveImage 를 부른다 — jsdom 에는 레이아웃이 없어
+  // elementFromPoint 로 하는 좌표 판정은 브라우저 점검(check:mobile)에서 본다)
+  const key = (el, k) => act(() => {
+    el.dispatchEvent(new window.KeyboardEvent('keydown', { key: k, bubbles: true }))
+  })
+  await key(grips()[2], 'ArrowLeft')   // 3 → 2번째
+  await key(grips()[1], 'ArrowLeft')   // 3 → 1번째
+  await key(grips()[2], 'ArrowLeft')   // 2 → 2번째... 아래에서 실제 배열로 확인한다
+
+  const shown = () => qa(host, '.img-thumb-open img').map((i) => i.getAttribute('src'))
+  check('화면 순서가 바뀌었다', shown().join() !== 'https://x/1.png,https://x/2.png,https://x/3.png', shown().join())
+
+  // 순서만 바꿔도 '바뀜' 으로 잡혀 닫기 확인이 뜬다
+  confirmAnswer = false
+  lastConfirm = null
+  await act(async () => {
+    document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  })
+  check('순서만 바꿔도 닫기 확인이 뜬다', typeof lastConfirm === 'string' && lastConfirm.length > 0, lastConfirm)
+  confirmAnswer = true
+
+  const before = shown()
+  await act(async () => { click(q(host, '.btn-primary')) })
+  const row = store.rows.items.find((r) => r.id === 'i-order')
+  const saved = (row?.image_url ?? '').split('\n')
+  check('저장된 순서가 화면 순서와 같다', saved.join() === before.join(), `${saved.join()} / ${before.join()}`)
+  check('저장 뒤에도 3장 그대로', saved.length === 3, saved.length)
+
+  // 재열람 — 저장된 값으로 다시 열면 그 순서로 나온다
+  act(() => { root.unmount() })
+  const again = mount(React.createElement(ItemModal, {
+    item: { ...item, image_url: saved.join('\n') },
+    categories: [], slots: [], userId: 'u1', onClose: () => {}, onSaved: () => {}
+  }))
+  const reopened = qa(again.host, '.img-thumb-open img').map((i) => i.getAttribute('src'))
+  check('재열람해도 순서가 유지된다', reopened.join() === saved.join(), reopened.join())
+  check('맨 앞에 대표 표시', q(again.host, '.img-thumb .img-thumb-tag')?.textContent === '대표')
+
+  // 카드 표지 = 첫 장. 순서를 바꿨으니 표지도 바뀐다.
+  const cover = parseImages(saved.join('\n'))[0]
+  check('카드 표지가 새 첫 장', cover === saved[0] && cover !== 'https://x/1.png', cover)
+  act(() => { again.root.unmount() })
+}
+
+// ── 13-b. 파일 3개 ▲▼ → 저장 → 재열람 ────────────────────────
+{
+  resetStore()
+  window.sessionStorage.clear()
+  const files = [
+    { path: 'p/1.pdf', name: '가.pdf', size: 10 },
+    { path: 'p/2.pdf', name: '나.pdf', size: 20 },
+    { path: 'p/3.pdf', name: '다.pdf', size: 30 }
+  ]
+  const item = {
+    id: 'f-order', title: '파일 순서', content: '', link_url: '', tags: [],
+    image_url: null, files
+  }
+  store.rows.items.push({ id: 'f-order', title: '파일 순서', image_url: null, files })
+  const { host, root } = mount(React.createElement(ItemModal, {
+    item, categories: [], slots: [], userId: 'u1', onClose: () => {}, onSaved: () => {}
+  }))
+
+  const names = (h = host) => qa(h, '.file-name').map((n) => n.textContent)
+  check('파일 3줄', names().length === 3, names().join())
+  check('줄마다 ▲▼ 가 있다', qa(host, '.file-move-btn').length === 6, qa(host, '.file-move-btn').length)
+  const ups = () => qa(host, '.file-move-btn').filter((b) => b.getAttribute('aria-label')?.endsWith('위로'))
+  const downs = () => qa(host, '.file-move-btn').filter((b) => b.getAttribute('aria-label')?.endsWith('아래로'))
+  check('첫 줄 ▲ 는 못 누른다', ups()[0].disabled === true)
+  check('끝 줄 ▼ 는 못 누른다', downs()[2].disabled === true)
+
+  await act(async () => { click(ups()[2]) })          // 다 → 2번째
+  check('▲ 한 번: 가,다,나', names().join() === '가.pdf,다.pdf,나.pdf', names().join())
+  await act(async () => { click(downs()[0]) })        // 가 → 2번째
+  check('▼ 한 번: 다,가,나', names().join() === '다.pdf,가.pdf,나.pdf', names().join())
+
+  await act(async () => { click(q(host, '.btn-primary')) })
+  const row = store.rows.items.find((r) => r.id === 'f-order')
+  const savedNames = parseFiles(row?.files).map((f) => f.name)
+  check('저장된 파일 순서가 화면과 같다', savedNames.join() === '다.pdf,가.pdf,나.pdf', savedNames.join())
+
+  act(() => { root.unmount() })
+  const again = mount(React.createElement(ItemModal, {
+    item: { ...item, files: parseFiles(row?.files) },
+    categories: [], slots: [], userId: 'u1', onClose: () => {}, onSaved: () => {}
+  }))
+  check('재열람해도 파일 순서가 유지된다', names(again.host).join() === '다.pdf,가.pdf,나.pdf', names(again.host).join())
+  act(() => { again.root.unmount() })
+}
+
+// ── 13-c. 한 장/한 개면 순서 UI 를 아예 안 그린다 ──────────────
+{
+  resetStore()
+  const one = mount(React.createElement(ItemModal, {
+    item: { id: 'one', title: 'x', content: '', link_url: '', tags: [],
+      image_url: 'https://x/only.png', files: [{ path: 'p/a.pdf', name: 'a.pdf', size: 1 }] },
+    categories: [], slots: [], userId: 'u1', onClose: () => {}, onSaved: () => {}
+  }))
+  check('이미지 1장이면 손잡이 없음', qa(one.host, '.img-grip').length === 0)
+  check('파일 1개면 ▲▼ 없음', qa(one.host, '.file-move-btn').length === 0)
+  act(() => { one.root.unmount() })
 }
 
 // ── 요약 ────────────────────────────────────────────────────

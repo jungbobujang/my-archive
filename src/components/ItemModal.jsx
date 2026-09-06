@@ -5,7 +5,8 @@
 // 수정 중인 항목의 링크도 같은 목록에서 더하고 뺀다.
 // 링크가 둘 이상이면 '한 항목에 모두 담기'(기본)와 '링크마다 개별 항목'을 고르게 하고,
 // 개별 모드가 예전 그 화면이 하던 일(링크마다 noembed 로 제목을 받아 한 건씩 저장)을 그대로 한다.
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { moveItem, useDragOrder } from '../reorder.js'
 import {
   supabase, extractUrls, parseLinks, parseTags, youtubeThumb, ymd, fetchLinkTitle,
   parseImages, joinImages, uploadImage, imageFilesFromPaste, MAX_IMAGES,
@@ -134,6 +135,16 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   // state 로 두면 setState 가 반영되기 전에 읽게 돼 늘 false 였다.
   const needsSql = useRef(false)
 
+  /* 순서 바꾸기. 배열 순서가 곧 표시 순서라 스키마는 건드리지 않는다.
+     🔴 이미지 첫 장이 카드 표지다(ItemCard 가 parseImages(item.image_url)[0] 을 쓴다).
+        그래서 순서를 바꾸면 표지도 따라 바뀐다 — 그게 이 기능을 쓰는 큰 이유다. */
+  const moveImage = useCallback((from, to) => {
+    setImages((cur) => moveItem(cur, from, to))
+  }, [])
+  const moveFile = useCallback((from, to) => {
+    setFiles((cur) => moveItem(cur, from, to))
+  }, [])
+
   // 링크마다 개별 항목으로 나눌지 (링크가 2개 이상일 때만 고를 수 있다)
   const [splitMode, setSplitMode] = useState(draft?.splitMode ?? false)
 
@@ -161,6 +172,9 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     [links, pendingLinks]
   )
   const splitting = !isEdit && splitMode && allLinks.length > 1
+
+  const imgOrder = useDragOrder({ count: images.length, onMove: moveImage })
+  const fileOrder = useDragOrder({ count: files.length, onMove: moveFile })
 
   // 제목·링크·내용·이미지·파일 중 하나라도 있으면 저장할 수 있다. 제목은 이제 필수가 아니다.
   const hasAnything =
@@ -990,16 +1004,22 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
             onDrop={handleDrop}
           >
             {images.length > 0 && (
-              <div className="img-strip">
+              <div className={`img-strip ${imgOrder.dragging ? 'reorder-on' : ''}`}>
                 {images.map((url, i) => (
-                  <div className="img-thumb" key={url}>
+                  <div
+                    className={`img-thumb${imgOrder.dragIndex === i ? ' reorder-drag' : ''}${
+                      imgOrder.dragIndex >= 0 && imgOrder.overIndex === i && imgOrder.dragIndex !== i
+                        ? ' reorder-over' : ''}`}
+                    key={url}
+                    {...(images.length > 1 ? imgOrder.itemProps(i) : {})}
+                  >
                     <button
                       type="button"
                       className="img-thumb-open"
                       onClick={() => setZoom(url)}
                       aria-label={`${i + 1}번째 이미지 크게 보기`}
                     >
-                      <img src={url} alt="" loading="lazy" decoding="async" />
+                      <img src={url} alt="" loading="lazy" decoding="async" draggable={false} />
                     </button>
                     <button
                       type="button"
@@ -1007,6 +1027,19 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
                       onClick={() => removeImage(url)}
                       aria-label={`${i + 1}번째 이미지 제거`}
                     >✕</button>
+                    {/* 끌기만 두면 키보드로는 순서를 못 바꾼다. 손잡이에 ←→ 를 달아 둔다. */}
+                    {images.length > 1 && (
+                      <button
+                        type="button"
+                        className="reorder-grip img-grip"
+                        aria-label={`${i + 1}번째 이미지 순서 바꾸기 — 방향키로 옮깁니다`}
+                        title="끌어서 옮기기 (방향키도 됩니다)"
+                        onKeyDown={(e) => {
+                          if (e.key === 'ArrowLeft' && i > 0) { e.preventDefault(); moveImage(i, i - 1) }
+                          if (e.key === 'ArrowRight' && i < images.length - 1) { e.preventDefault(); moveImage(i, i + 1) }
+                        }}
+                      >⠿</button>
+                    )}
                     {i === 0 && <span className="img-thumb-tag">대표</span>}
                   </div>
                 ))}
@@ -1039,6 +1072,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
               <p className="img-hint">
                 붙여넣기(Ctrl+V)·끌어놓기로도 올릴 수 있어요 · 최대 {MAX_IMAGES}장 ·
                 긴 변 1600px 넘으면 줄여서 올려요
+                {images.length > 1 && ' · 썸네일을 끌면 순서가 바뀌고 맨 앞이 카드 표지예요 (폰은 꾹 누른 뒤 끌기)'}
               </p>
             </div>
           </div>
@@ -1054,9 +1088,37 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
             onDrop={handleDrop}
           >
             {files.length > 0 && (
-              <ul className="file-list">
-                {files.map((f) => (
-                  <li className="file-row" key={f.path}>
+              <ul className={`file-list ${fileOrder.dragging ? 'reorder-on' : ''}`}>
+                {files.map((f, i) => (
+                  <li
+                    className={`file-row${fileOrder.dragIndex === i ? ' reorder-drag' : ''}${
+                      fileOrder.dragIndex >= 0 && fileOrder.overIndex === i && fileOrder.dragIndex !== i
+                        ? ' reorder-over' : ''}`}
+                    key={f.path}
+                    {...(files.length > 1 ? fileOrder.itemProps(i) : {})}
+                  >
+                    {/* 세로 목록은 버튼이 더 정확하다 — 한 칸씩 옮기는 일이 대부분이고,
+                        좁은 화면에서 끌기는 손가락이 목록 밖으로 나가기 쉽다. */}
+                    {files.length > 1 && (
+                      <span className="file-move">
+                        <button
+                          type="button"
+                          className="file-move-btn"
+                          onClick={() => moveFile(i, i - 1)}
+                          disabled={i === 0}
+                          aria-label={`${f.name} 위로`}
+                          title="위로"
+                        >▲</button>
+                        <button
+                          type="button"
+                          className="file-move-btn"
+                          onClick={() => moveFile(i, i + 1)}
+                          disabled={i === files.length - 1}
+                          aria-label={`${f.name} 아래로`}
+                          title="아래로"
+                        >▼</button>
+                      </span>
+                    )}
                     <button
                       type="button"
                       className="file-open"

@@ -209,6 +209,151 @@ check('375px(파일): 기본 파일 위젯은 숨어 있다', f.fileInputHidden 
 check('375px(파일): 이름이 잘리지 않고 그대로', f.fileNames[1] === '학생 명단.xlsx', f.fileNames.join(' | '))
 check('375px(파일): 용량이 붙어 있다', f.fileSizes.join(' ') === '2.3MB 18KB 940B', f.fileSizes.join(' '))
 
+/* ── 순서 바꾸기: 375px 터치 ──────────────────────────────────────────
+   여기서 재려는 것은 둘이다.
+   ① 꾹 누른 뒤 끌면 순서가 바뀐다.
+   ② 그냥 쓸어내리면 순서는 그대로이고 **화면이 스크롤된다**.
+   🔴 ② 가 이 기능의 진짜 위험이다. 썸네일 줄에 touch-action:none 같은 것을 걸어 두면
+      순서 바꾸기는 잘 되지만 그 위에서 화면을 못 넘기게 된다 — 순서를 바꿀 일이 없는
+      사람에게는 그냥 고장이다. 그래서 스크롤이 되는지를 같이 잰다. */
+{
+  const page = await browser.newPage()
+  await page.setViewport({ width: 375, height: 812, deviceScaleFactor: 2, hasTouch: true, isMobile: true })
+  await page.goto(`${base}?mode=reorder`, { waitUntil: 'networkidle0' })
+  await page.waitForSelector('.img-thumb', { timeout: 15000 })
+
+  const cdp = await page.createCDPSession()
+  const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', {
+    type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, radiusX: 10, radiusY: 10, force: 1 }]
+  })
+  const centerOf = (sel, i = 0) => page.evaluate((s2, n) => {
+    const el = document.querySelectorAll(s2)[n]
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }
+  }, sel, i)
+  const order = () => page.evaluate(
+    () => [...document.querySelectorAll('.img-thumb-open img')].map((i) => i.getAttribute('src').slice(-30))
+  )
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+  await page.evaluate(() => document.querySelector('.img-strip')?.scrollIntoView({ block: 'center' }))
+  await sleep(120)
+
+  const before = await order()
+  check('375px(순서): 이미지 3장', before.length === 3, before.length)
+  check('375px(순서): 손잡이가 폰에서 보인다', await page.evaluate(
+    () => getComputedStyle(document.querySelector('.img-grip')).opacity === '1'
+  ))
+  const gripHit = await page.evaluate(() => {
+    const el = document.querySelector('.img-grip')
+    const r = el.getBoundingClientRect()
+    const cs = getComputedStyle(el, '::after')
+    const num = (v) => (v === 'auto' ? 0 : parseFloat(v) || 0)
+    const has = cs.content !== 'none'
+    return { w: Math.round(r.width - (has ? num(cs.left) + num(cs.right) : 0)),
+      h: Math.round(r.height - (has ? num(cs.top) + num(cs.bottom) : 0)) }
+  })
+  check('375px(순서): 손잡이 손가락 영역 38px 급', gripHit.h >= 38 && gripHit.w >= 38, JSON.stringify(gripHit))
+
+  // ① 꾹 누르고(400ms) 3번째 자리로 끌기
+  const a = await centerOf('.img-thumb', 0)
+  const c = await centerOf('.img-thumb', 2)
+  await touch('touchStart', a.x, a.y)
+  await sleep(400)                                  // 롱프레스 300ms 를 넘긴다
+  await touch('touchMove', a.x + 10, a.y)
+  await touch('touchMove', c.x, c.y)
+  await sleep(60)
+  await touch('touchEnd', c.x, c.y)
+  await sleep(150)
+  const after = await order()
+  check('375px(순서): 꾹 눌러 끌면 순서가 바뀐다',
+    after.join() !== before.join() && after[after.length - 1] === before[0],
+    `${before.join()} → ${after.join()}`)
+
+  /* ② 스크롤을 방해하지 않는가.
+     🔴 여기서 재는 방법을 한 번 바꿨다. 처음에는 실제로 굴려 보려고
+        Input.synthesizeScrollGesture(touch) 를 썼는데, 이 환경에서는 **끌기를 한 적이
+        없는 새 페이지에서도** 안쪽 스크롤 상자를 굴리지 못했다(마우스 제스처는 굴린다).
+        즉 그 실패는 우리 코드가 아니라 합성 터치의 한계였고, 그걸 그대로 두면
+        '멀쩡한데 빨간 줄' 이 남아 다음 사람이 진짜 고장과 구분하지 못한다.
+     그래서 스크롤 그 자체 대신 **스크롤을 막는 두 가지 수단**을 직접 잰다:
+        ㄱ. 평소에 touch-action 을 none 으로 묶어 두지 않았는가 (CSS 쪽)
+        ㄴ. 끌기가 끝난 뒤 touchmove 차단이 풀렸는가 (JS 쪽)
+     이 둘이 지켜지면 손가락은 평소처럼 화면을 넘길 수 있다. */
+  const kept = await order()
+  const ta = await page.evaluate(() => ({
+    strip: getComputedStyle(document.querySelector('.img-strip')).touchAction,
+    thumb: getComputedStyle(document.querySelector('.img-thumb')).touchAction,
+    row: getComputedStyle(document.querySelector('.file-row')).touchAction
+  }))
+  check('375px(순서): 평소 touch-action 을 묶어 두지 않는다',
+    ta.strip !== 'none' && ta.thumb !== 'none' && ta.row !== 'none', JSON.stringify(ta))
+
+  // 끌기가 끝난 지금, document 의 touchmove 는 아무도 막지 않아야 한다
+  const blockedAfter = await page.evaluate(() => {
+    const ev = new TouchEvent('touchmove', { bubbles: true, cancelable: true })
+    document.dispatchEvent(ev)
+    return ev.defaultPrevented
+  })
+  check('375px(순서): 끌기가 끝나면 스크롤 차단이 풀린다', blockedAfter === false, blockedAfter)
+
+  // 끌기 중에는 막아야 한다 (그래야 끌면서 화면이 같이 밀리지 않는다)
+  const a2 = await centerOf('.img-thumb', 0)
+  await touch('touchStart', a2.x, a2.y)
+  await sleep(400)
+  const blockedDuring = await page.evaluate(() => {
+    const ev = new TouchEvent('touchmove', { bubbles: true, cancelable: true })
+    document.dispatchEvent(ev)
+    return ev.defaultPrevented
+  })
+  await touch('touchEnd', a2.x, a2.y)
+  await sleep(120)
+  check('375px(순서): 끌기 중에는 화면이 같이 밀리지 않는다', blockedDuring === true, blockedDuring)
+  const blockedAgain = await page.evaluate(() => {
+    const ev = new TouchEvent('touchmove', { bubbles: true, cancelable: true })
+    document.dispatchEvent(ev)
+    return ev.defaultPrevented
+  })
+  check('375px(순서): 손을 떼면 다시 풀린다', blockedAgain === false, blockedAgain)
+  check('375px(순서): 끌지 않고 떼면 순서는 그대로', (await order()).join() === kept.join())
+
+  // 파일 줄의 ▲▼ 손가락 영역
+  await page.evaluate(() => document.querySelector('.file-list')?.scrollIntoView({ block: 'center' }))
+  await sleep(120)
+  const moveHit = await page.evaluate(() => {
+    const el = document.querySelector('.file-move-btn')
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    const cs = getComputedStyle(el, '::after')
+    const num = (v) => (v === 'auto' ? 0 : parseFloat(v) || 0)
+    const has = cs.content !== 'none'
+    return { w: Math.round(r.width - (has ? num(cs.left) + num(cs.right) : 0)),
+      h: Math.round(r.height - (has ? num(cs.top) + num(cs.bottom) : 0)) }
+  })
+  check('375px(순서): 파일 ▲▼ 가 있다', moveHit !== null, JSON.stringify(moveHit))
+  check('375px(순서): 파일 ▲▼ 손가락 영역 24px 급',
+    moveHit && moveHit.h >= 24 && moveHit.w >= 30, JSON.stringify(moveHit))
+
+  // ▲ 를 눌러 실제로 옮겨진다
+  const names0 = await page.evaluate(() => [...document.querySelectorAll('.file-name')].map((n) => n.textContent))
+  await page.evaluate(() => {
+    const ups = [...document.querySelectorAll('.file-move-btn')]
+      .filter((b) => b.getAttribute('aria-label')?.endsWith('위로'))
+    ups[2]?.click()
+  })
+  await sleep(150)
+  const names1 = await page.evaluate(() => [...document.querySelectorAll('.file-name')].map((n) => n.textContent))
+  check('375px(순서): ▲ 로 파일이 올라간다',
+    names1[1] === names0[2] && names1[2] === names0[1], `${names0.join(' | ')} → ${names1.join(' | ')}`)
+
+  check('375px(순서): 가로 스크롤 없음',
+    (await page.evaluate(() => document.documentElement.scrollWidth)) <= 375)
+
+  await page.screenshot({ path: path.join(outDir, 'modal-375-reorder.png'), fullPage: true })
+  await page.close()
+}
+
 const fw = await shot('modal-1280-files', `${base}?mode=files`, 1280, 900, '.file-drop')
 check('1280px(파일): 가로 스크롤 없음', fw.docScrollW <= 1280, fw.docScrollW)
 check('1280px(파일): 긴 이름이 ✕ 를 덮지 않는다', fw.fileNameOverlapsX === false)
