@@ -1324,6 +1324,43 @@ const imagesBucket = () => store.buckets['archive-images']
   const shown = () => qa(host, '.img-thumb-open img').map((i) => i.getAttribute('src'))
   check('화면 순서가 바뀌었다', shown().join() !== 'https://x/1.png,https://x/2.png,https://x/3.png', shown().join())
 
+  /* PC(마우스)에서도 **같은 조작**이다 — 클릭해서 고르고 버튼으로 옮긴다.
+     🔴 이 블록에는 matchMedia 를 심지 않았다. 즉 여기가 곧 '거친 포인터가 아닌 기기' 다.
+        폰에서만 뜨던 옮기기 줄이 여기서도 떠야 조작이 기기 간에 같아진다. */
+  await act(async () => { click(thumbs()[2]) })
+  check('PC: 클릭하면 고른 표시가 붙는다', qa(host, '.img-thumb.img-picked').length === 1)
+  check('PC: 옮기기 줄이 뜬다', q(host, '.img-pickbar') !== null)
+  check('PC: 클릭이 확대창을 열지 않는다', q(host, '.img-zoom') === null)
+  const pcShown = () => qa(host, '.img-thumb-open img').map((i) => i.getAttribute('src'))
+  const pcBefore = pcShown()
+  await act(async () => { click(q(host, '.img-pickbar-first')) })
+  check('PC: 클릭 2번에 맨 앞으로 온다', pcShown()[0] === pcBefore[2], pcShown().join())
+  check('PC: 크게 보기는 옮기기 줄에 있다',
+    qa(host, '.img-pickbar .btn-sm').some((b) => b.textContent.includes('크게 보기')))
+  // 그 버튼으로 확대창이 열리는지 (크게 보기 경로가 살아 있는가)
+  await act(async () => {
+    click(qa(host, '.img-pickbar .btn-sm').find((b) => b.textContent.includes('크게 보기')))
+  })
+  check('PC: [크게 보기] 로 확대창이 열린다', q(host, '.img-zoom') !== null)
+  await act(async () => {
+    q(host, '.img-zoom').dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }))
+  })
+  check('PC: 확대창을 닫을 수 있다', q(host, '.img-zoom') === null)
+  /* 🔴 옮겨 본 것을 되돌린다. 이 블록은 아래(저장·재열람·카드 표지) 판정이 세워 둔
+     배치를 빌려 쓴 것이라, 어지른 채로 넘기면 그쪽 판정이 엉뚱한 이유로 무너진다.
+     되돌리는 길이 곧 [▶] 두 번이 제대로 도는지에 대한 판정이기도 하다. */
+  const nextBtn = () => qa(host, '.img-pickbar .btn-sm')
+    .find((b) => b.getAttribute('aria-label') === '한 칸 뒤로')
+  await act(async () => { click(nextBtn()) })
+  await act(async () => { click(nextBtn()) })
+  check('PC: [▶] 두 번으로 제자리에 돌아온다', pcShown().join() === pcBefore.join(), pcShown().join())
+  await act(async () => { click(q(host, '.img-pickbar-off')) })
+  check('PC: 선택을 놓으면 줄이 사라진다', q(host, '.img-pickbar') === null)
+  // 마우스에서는 끌기도 남아 있다 (주 경로는 아니지만 지우지 않았다)
+  check('PC: 끌기 훅은 그대로 붙어 있다',
+    qa(host, '.img-thumb[data-reorder-index]').length === 3,
+    qa(host, '.img-thumb[data-reorder-index]').length)
+
   // 순서만 바꿔도 '바뀜' 으로 잡혀 닫기 확인이 뜬다
   confirmAnswer = false
   lastConfirm = null
@@ -1450,7 +1487,7 @@ const imagesBucket = () => store.buckets['archive-images']
   check('터치 ①: 옮기기 줄이 뜬다', q(host, '.img-pickbar') !== null)
   check('터치 ①: 몇 번째인지 적는다', q(host, '.img-pickbar-at')?.textContent.includes('3번째'),
     q(host, '.img-pickbar-at')?.textContent)
-  check('터치 ①: 크게 보기가 아니라 고르기다 (확대창이 안 열린다)', q(host, '.zoom-backdrop') === null)
+  check('터치 ①: 크게 보기가 아니라 고르기다 (확대창이 안 열린다)', q(host, '.img-zoom') === null)
 
   // ② [◀ 맨 앞] 한 번 → 표지가 된다. 여기까지 탭 두 번.
   await act(async () => { click(q(host, '.img-pickbar-first')) })

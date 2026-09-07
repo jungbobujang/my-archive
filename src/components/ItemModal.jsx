@@ -173,12 +173,14 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   )
   const splitting = !isEdit && splitMode && allLinks.length > 1
 
-  /* 순서 바꾸기 — 입력 장치에 따라 방식을 **바꾼다**.
-     🔴 마우스: 끌기가 제일 빠르다. 그대로 둔다.
-     🔴 터치: 끌기를 버린다. 꾹 누르기 300ms → 조금만 밀리면 스크롤로 넘어감 →
-        84px 줄 안에서 손가락이 목록 밖으로 나감. 실사용에서 조작 불가 판정이 났다.
-        대신 **탭으로 고르고 버튼으로 옮긴다** (아래 pick / img-pickbar).
-     파일 줄은 터치에서도 ▲▼ 버튼이 이미 있어서 잃는 것이 없다. */
+  /* 순서 바꾸기 — **기기와 무관하게 같은 조작**이다: 눌러서 고르고 버튼으로 옮긴다.
+     🔴 폰에서 끌기가 조작 불가 판정을 받아 탭 방식을 넣었는데, PC 에서도 끌기가
+        불편하다는 판정이 이어서 나왔다. 그래서 주 경로를 클릭-버튼 하나로 합쳤다 —
+        기기마다 조작이 다르면 '내 폰에서 되던 방법' 이 PC 에서 안 먹고, 그때 사람은
+        기능이 없어진 줄 안다.
+     🔴 끌기는 **지우지 않고 남긴다** (마우스에서만). 익은 사람에게는 그쪽이 빠르고,
+        남겨 두는 비용은 코드 몇 줄뿐이다. 다만 안내와 커서만 거들 뿐 주 경로가 아니다.
+     🔴 터치에서 끌기를 다시 켜지는 않는다. 그건 못 쓴다고 이미 판정이 난 조작이다. */
   const coarse = useCoarsePointer()
   const imgOrder = useDragOrder({ count: images.length, onMove: moveImage, enabled: !coarse })
   const fileOrder = useDragOrder({ count: files.length, onMove: moveFile, enabled: !coarse })
@@ -190,10 +192,6 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   useEffect(() => {
     if (pick >= images.length) setPick(-1)
   }, [images.length, pick])
-  // 마우스로 돌아오면(태블릿에 마우스를 붙였다) 선택 막대를 치운다 — 그때는 끌기가 산다
-  useEffect(() => {
-    if (!coarse) setPick(-1)
-  }, [coarse])
 
   function movePick(to) {
     if (pick < 0) return
@@ -1028,12 +1026,12 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
             onDragLeave={() => setDragOver(false)}
             onDrop={handleDrop}
           >
-            {/* 고른 썸네일을 옮기는 줄. 터치에서만, 고른 것이 있을 때만 나온다.
+            {/* 고른 썸네일을 옮기는 줄. **기기와 무관하게** 고른 것이 있을 때 나온다.
                 🔴 [◀ 맨 앞] 을 맨 왼쪽에 크게 둔다. 순서를 바꾸는 이유는 열에 아홉이
                    '표지를 이걸로' 이고, 그건 한 칸씩 미는 일이 아니라 **한 번에 맨 앞**이다.
                 🔴 [크게 보기] 가 여기 있는 이유: 터치에서는 썸네일 탭이 '고르기' 가 되어
                    크게 보기를 잃는다. 잃은 길을 이 줄에서 돌려준다. */}
-            {coarse && pick >= 0 && images.length > 1 && (
+            {pick >= 0 && images.length > 1 && (
               <div className="img-pickbar" role="group" aria-label="고른 이미지 옮기기">
                 <span className="img-pickbar-at" aria-live="polite">
                   {pick + 1}번째{pick === 0 ? ' · 대표' : ''}
@@ -1080,18 +1078,20 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
                   <div
                     className={`img-thumb${imgOrder.dragIndex === i ? ' reorder-drag' : ''}${
                       imgOrder.dragIndex >= 0 && imgOrder.overIndex === i && imgOrder.dragIndex !== i
-                        ? ' reorder-over' : ''}${coarse && pick === i ? ' img-picked' : ''}`}
+                        ? ' reorder-over' : ''}${pick === i ? ' img-picked' : ''}`}
                     key={url}
                     {...(images.length > 1 && !coarse ? imgOrder.itemProps(i) : {})}
                   >
                     <button
                       type="button"
                       className="img-thumb-open"
-                      /* 터치: 탭 = 고르기(한 번 더 탭하면 놓기). 마우스: 탭 = 크게 보기.
-                         🔴 터치에서 탭을 크게 보기로 두면 고를 방법이 없고, 고르기를
-                            길게 누르기로 두면 방금 버린 그 조작으로 되돌아간다. */
+                      /* 누르면 **고른다** — 폰이든 PC 든 같다. 한 번 더 누르면 놓는다.
+                         🔴 크게 보기는 옮기기 줄의 [크게 보기] 로 옮겼다. 한 자리에서
+                            두 가지 일(고르기·확대)이 일어나면 어느 쪽이 될지 알 수 없다.
+                         🔴 한 장뿐이면 고를 일이 없으므로 그때만 눌러서 크게 보기다
+                            (옮기기 줄 자체가 안 뜨는 상태라, 확대할 길이 여기밖에 없다). */
                       onClick={() => {
-                        if (coarse && images.length > 1) setPick(pick === i ? -1 : i)
+                        if (images.length > 1) setPick(pick === i ? -1 : i)
                         else setZoom(url)
                       }}
                       /* 키보드로도 순서를 바꾼다. 손잡이(⠿)를 없애면서 이 자리로 옮겼다 —
@@ -1101,10 +1101,10 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
                         if (e.key === 'ArrowLeft' && i > 0) { e.preventDefault(); moveImage(i, i - 1) }
                         if (e.key === 'ArrowRight' && i < images.length - 1) { e.preventDefault(); moveImage(i, i + 1) }
                       }}
-                      aria-label={coarse && images.length > 1
-                        ? `${i + 1}번째 이미지 ${pick === i ? '선택 해제' : '고르기'}`
-                        : `${i + 1}번째 이미지 크게 보기 — 방향키로 순서를 바꿉니다`}
-                      aria-pressed={coarse && images.length > 1 ? pick === i : undefined}
+                      aria-label={images.length > 1
+                        ? `${i + 1}번째 이미지 ${pick === i ? '선택 해제' : '고르기'} — 방향키로도 옮깁니다`
+                        : `${i + 1}번째 이미지 크게 보기`}
+                      aria-pressed={images.length > 1 ? pick === i : undefined}
                     >
                       <img src={url} alt="" loading="lazy" decoding="async" draggable={false} />
                     </button>
@@ -1146,11 +1146,11 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
               <p className="img-hint">
                 붙여넣기(Ctrl+V)·끌어놓기로도 올릴 수 있어요 · 최대 {MAX_IMAGES}장 ·
                 긴 변 1600px 넘으면 줄여서 올려요
-                {/* 🔴 안내도 입력 장치에 맞춘다. 폰에서 '끌어 보세요' 라고 적어 두면
-                    지금은 되지도 않는 조작을 시키는 것이 된다. */}
-                {images.length > 1 && (coarse
-                  ? ' · 썸네일을 눌러 고른 뒤 [◀ 맨 앞] 을 누르면 카드 표지가 됩니다'
-                  : ' · 썸네일을 끌면 순서가 바뀌고 맨 앞이 카드 표지예요')}
+                {/* 🔴 주 안내는 기기와 상관없이 **같은 한 문장**이다. 끌기는 마우스에서만
+                    되는 곁길이라 그때만 괄호로 덧붙인다 — 폰에서 '끌어 보세요' 라고
+                    적어 두면 되지도 않는 조작을 시키는 것이 된다. */}
+                {images.length > 1 && ' · 썸네일을 눌러 고른 뒤 [◀ 맨 앞] 을 누르면 카드 표지가 됩니다'}
+                {images.length > 1 && !coarse && ' (끌어서 옮겨도 됩니다)'}
               </p>
             </div>
           </div>

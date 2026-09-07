@@ -278,7 +278,7 @@ check('375px(파일): 용량이 붙어 있다', f.fileSizes.join(' ') === '2.3MB
   check('375px(순서): 고른 것이 3번째',
     await page.evaluate(() => [...document.querySelectorAll('.img-thumb')][2].classList.contains('img-picked')))
   check('375px(순서): 옮기기 줄이 뜬다', (await page.$('.img-pickbar')) !== null)
-  check('375px(순서): 탭이 확대창을 열지 않는다', (await page.$('.zoom-backdrop')) === null)
+  check('375px(순서): 탭이 확대창을 열지 않는다', (await page.$('.img-zoom')) === null)
   const barHit = await page.evaluate(() => {
     const el = document.querySelector('.img-pickbar-first')
     const r = el.getBoundingClientRect()
@@ -401,6 +401,51 @@ check('375px(파일): 용량이 붙어 있다', f.fileSizes.join(' ') === '2.3MB
   check('1280px(순서): 마우스에서는 끌기가 살아 있다',
     (await page.$$('.img-thumb[data-reorder-index]')).length === 3)
 
+  /* ① 주 경로는 **클릭-버튼**이다 — 폰과 완전히 같은 조작.
+     🔴 여기가 이번 개정의 요점이다. 기기마다 조작이 다르면 '폰에서 되던 방법' 이 PC 에서
+        안 먹고, 그때 사람은 기능이 없어진 줄 안다. 맨 끝 → 대표가 **클릭 두 번**이어야 한다. */
+  const clickAt = async (sel, i = 0) => {
+    const el = (await page.$$(sel))[i]
+    await el.click()
+    await sleep(140)
+  }
+  await clickAt('.img-thumb-open', 2)
+  check('1280px(순서): 클릭하면 고른 표시가 붙는다',
+    (await page.$$('.img-thumb.img-picked')).length === 1)
+  check('1280px(순서): 옮기기 줄이 뜬다 (폰과 같은 줄)', (await page.$('.img-pickbar')) !== null)
+  check('1280px(순서): 클릭이 확대창을 열지 않는다', (await page.$('.img-zoom')) === null)
+  await clickAt('.img-pickbar-first')
+  const clicked = await order()
+  check('1280px(순서): 클릭 2번에 맨 끝이 대표가 된다',
+    clicked[0] === before[2], `${before.join()} → ${clicked.join()}`)
+
+  /* ② 크게 보기 경로가 살아 있는가 — 클릭이 '고르기' 가 되면서 옮긴 자리다 */
+  const zoomBtn = await page.evaluateHandle(() =>
+    [...document.querySelectorAll('.img-pickbar .btn-sm')].find((b) => b.textContent.includes('크게 보기')))
+  await zoomBtn.asElement().click()
+  await sleep(150)
+  check('1280px(순서): [크게 보기] 로 확대창이 열린다', (await page.$('.img-zoom')) !== null)
+  await page.evaluate(() => document.querySelector('.img-zoom-x')?.click())
+  await sleep(150)
+  check('1280px(순서): 확대창이 닫힌다', (await page.$('.img-zoom')) === null)
+  await page.evaluate(() => document.querySelector('.img-pickbar-off')?.click())
+  await sleep(150)
+
+  // 되돌려 놓고 아래 끌기 판정으로 넘어간다 (끌기는 남겨 둔 곁길이다)
+  await page.evaluate(() => {
+    const thumbs = [...document.querySelectorAll('.img-thumb-open')]
+    thumbs[0].click()
+  })
+  await sleep(140)
+  for (let n = 0; n < 2; n++) {
+    await page.evaluate(() => [...document.querySelectorAll('.img-pickbar .btn-sm')]
+      .find((b) => b.getAttribute('aria-label') === '한 칸 뒤로')?.click())
+    await sleep(120)
+  }
+  await page.evaluate(() => document.querySelector('.img-pickbar-off')?.click())
+  await sleep(140)
+  check('1280px(순서): [▶] 두 번으로 제자리', (await order()).join() === before.join(), (await order()).join())
+
   // 맨 끝 썸네일을 잡아 **첫 썸네일보다 왼쪽**(줄의 여백)으로 끌어다 놓는다
   const last = await boxOf('.img-thumb', 2)
   const strip = await boxOf('.img-strip')
@@ -429,7 +474,8 @@ check('375px(파일): 용량이 붙어 있다', f.fileSizes.join(' ') === '2.3MB
   check('1280px(순서): 오른쪽 여백에 놓으면 맨 뒤로 간다',
     after2[after2.length - 1] === after[0], `${after.join()} → ${after2.join()}`)
 
-  check('1280px(순서): 폰 전용 옮기기 줄은 안 뜬다', (await page.$('.img-pickbar')) === null)
+  // 고른 것이 없으면 줄도 없다 (있는 줄은 PC·폰 같은 줄이다 — 위 ①에서 확인했다)
+  check('1280px(순서): 고른 것이 없으면 옮기기 줄이 없다', (await page.$('.img-pickbar')) === null)
   await page.screenshot({ path: path.join(outDir, 'modal-1280-reorder.png'), fullPage: true })
   await page.close()
 }

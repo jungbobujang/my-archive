@@ -680,6 +680,9 @@ a:focus-visible {
   border: 1px solid var(--line);
   background: var(--bg);
 }
+/* 🔴 커서가 zoom-in 이 아니다. 누르면 크게 보는 것이 아니라 **고르는** 자리로 바뀌었다
+   (크게 보기는 옮기기 줄의 버튼이다). 마우스에서는 끌기도 여전히 되므로 grab 으로 두어
+   그 곁길을 알린다 — 끄는 중의 grabbing 은 .reorder-on 이 맡는다. */
 .img-thumb-open {
   display: block;
   width: 100%;
@@ -687,7 +690,10 @@ a:focus-visible {
   padding: 0;
   border: none;
   background: none;
-  cursor: zoom-in;
+  cursor: pointer;
+}
+@media (hover: hover) and (pointer: fine) {
+  .img-thumb-open { cursor: grab; }
 }
 .img-thumb-open img { width: 100%; height: 100%; object-fit: cover; display: block; }
 /* 빼기(✕) — 우상단 모서리에 작게.
