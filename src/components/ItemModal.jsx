@@ -7,6 +7,7 @@
 // 개별 모드가 예전 그 화면이 하던 일(링크마다 noembed 로 제목을 받아 한 건씩 저장)을 그대로 한다.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { moveItem, useDragOrder, useCoarsePointer } from '../reorder.js'
+import { useFlip } from '../motion.js'
 import {
   supabase, extractUrls, parseLinks, parseTags, youtubeThumb, ymd, fetchLinkTitle,
   parseImages, joinImages, uploadImage, imageFilesFromPaste, MAX_IMAGES,
@@ -188,6 +189,10 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   // 터치에서 고른 썸네일의 번호(-1 이면 아무것도 안 고름).
   // 🔴 번호로 기억한다 — 옮기면 번호가 따라 바뀌므로 옮긴 뒤에 직접 갱신한다.
   const [pick, setPick] = useState(-1)
+  /* 썸네일이 자리를 옮길 때 순간이동하지 않게 한다(FLIP).
+     🔴 [◀ 맨 앞] 은 한 번에 두세 칸을 건너뛰는 조작이라, 그림이 그냥 바뀌어 버리면
+        '무엇이 어디로 갔나' 를 눈으로 못 따라간다. 움직임이 그 답이다. */
+  const stripRef = useFlip([images.join('|')])
   // 고른 것이 사라지면(빼기·저장 실패 되돌림) 선택도 놓는다.
   useEffect(() => {
     if (pick >= images.length) setPick(-1)
@@ -721,6 +726,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
         files: joinFiles(files)
       }
 
+      let savedId = null
       if (isEdit) {
         const { data: saved, error: dbErr } = await runWithFilesFallback(
           (p) => supabase.from('items').update(withSafeTitle(p)).eq('id', item.id).select().single(),
@@ -728,14 +734,17 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
         )
         if (dbErr) throw dbErr
         await linkCategories(saved.id)
+        savedId = saved.id
       } else {
-        await insertOne(payload)
+        savedId = (await insertOne(payload))?.id ?? null
       }
 
       clearDraft(draftKey)
       await flushPendingRemoval()
 
-      onSaved(sqlHint())
+      /* 🔴 저장한 항목의 id 를 같이 넘긴다. 목록 쪽이 '어느 카드가 방금 들어온 것인지'
+         알아야 그 자리에 눈이 가게 만들 수 있다 (Archive 의 savedId). */
+      onSaved(sqlHint(), savedId)
     } catch (err) {
       reportSaveError(err)
     } finally {
@@ -1071,6 +1080,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
 
             {images.length > 0 && (
               <div
+                ref={stripRef}
                 className={`img-strip ${imgOrder.dragging ? 'reorder-on' : ''}`}
                 {...(images.length > 1 && !coarse ? imgOrder.containerProps('x') : {})}
               >
@@ -1080,6 +1090,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
                       imgOrder.dragIndex >= 0 && imgOrder.overIndex === i && imgOrder.dragIndex !== i
                         ? ' reorder-over' : ''}${pick === i ? ' img-picked' : ''}`}
                     key={url}
+                    data-flip-key={url}
                     {...(images.length > 1 && !coarse ? imgOrder.itemProps(i) : {})}
                   >
                     <button

@@ -18,6 +18,7 @@ import { SkeletonCards } from './Skeleton.jsx'
 import Settings from './Settings.jsx'
 import LockScreen from './LockScreen.jsx'
 import { useIdleLock } from '../hooks.js'
+import { useFlip, staggerDelay, playOnce, DUR_MS } from '../motion.js'
 import { readLockConfig, inGrace, endGrace } from '../lock.js'
 
 // categoryIds 가 없을 때 넘길 고정 빈 배열 (매번 [] 를 새로 만들면 ItemCard 의 memo 가 풀린다)
@@ -50,6 +51,21 @@ export default function Archive({ session, onNavigate }) {
   const [view, setView] = useState(() => localStorage.getItem('archive-view') || 'grid')
   const [tab, setTab] = useState(() => localStorage.getItem('archive-tab') || 'today')
   const [refreshKey, setRefreshKey] = useState(0)
+
+  /* ── 모션 ────────────────────────────────────────────────────────────
+     🔴 '무엇이 새로 들어왔나' 는 목록 전체를 아는 이 자리만 알 수 있다. 카드가 각자
+        판단하면 검색어 한 글자마다 화면 전체가 떠오른다.
+     🔴 ref 로 든다. 이전 목록을 state 로 두면 그 자체가 렌더를 한 번 더 부른다. */
+  /* 🔴 '새 카드인가' 의 답을 **한 번 정하고 기억한다.** Set 으로 '봤다' 만 적어 두면,
+     같은 목록이 한 번 더 그려지는 순간(개수·소속을 뒤이어 받아 오면 늘 그렇다)
+     방금 뜨던 카드가 '이미 본 것' 이 되어 등장 클래스가 떨어져 나간다 —
+     애니메이션이 중간에 잘려 반쯤 투명한 카드가 남는다. 실제로 그렇게 잡혔다. */
+  const firstSeen = useRef(new Map())     // id → true(이번 화면에서 처음 보임)
+  const [savedId, setSavedId] = useState(null)   // 방금 저장돼 들어온 카드
+  const [quickOk, setQuickOk] = useState(false)  // 빠른 저장 성공 표시(체크 + 펄스)
+  /* 자리가 바뀐 카드를 미끄러지게 한다(FLIP). 목록의 순서가 바뀔 때만 다시 잰다 —
+     카테고리를 고르거나 검색을 좁히면 남는 카드들이 순간이동 대신 움직인다. */
+  const gridRef = useFlip([items.map((i) => i.id).join(','), view])
 
   const [quickText, setQuickText] = useState('')
   const [quickBusy, setQuickBusy] = useState(false)
@@ -361,6 +377,11 @@ export default function Archive({ session, onNavigate }) {
       return
     }
     setQuickText('')
+    /* 🔴 입력줄이 비워진 것만으로는 '저장됨' 과 '지워짐' 이 구분되지 않는다.
+       줄이 한 번 뛰고 체크가 잠깐 떴다 사라지는 것으로 그 자리에서 답한다
+       (토스트는 화면 구석이라 눈이 거기까지 안 간다). */
+    setQuickOk(true)
+    setTimeout(() => setQuickOk(false), 900)
     toast.success(isTodo ? '할 것으로 저장했어요' : '저장했어요')
     refresh()
   }
@@ -703,7 +724,7 @@ export default function Archive({ session, onNavigate }) {
       )}
 
       <form
-        className={`quick-row ${quickDrag ? 'quick-row-drop' : ''}`}
+        className={`quick-row ${quickDrag ? 'quick-row-drop' : ''} ${quickOk ? 'quick-ok' : ''}`}
         onSubmit={quickSave}
         onDragOver={(e) => { e.preventDefault(); setQuickDrag(true) }}
         onDragLeave={() => setQuickDrag(false)}
@@ -729,6 +750,8 @@ export default function Archive({ session, onNavigate }) {
           aria-label="빠른 저장"
           disabled={quickUpload > 0}
         />
+        {/* 저장 직후 잠깐만 뜬다. aria-live 로 화면낭독기에도 같은 사실이 전해진다. */}
+        {quickOk && <span className="quick-check" role="status">✓ 저장됨</span>}
         <button
           type="submit"
           className="btn-primary btn-sm"
@@ -847,20 +870,33 @@ export default function Archive({ session, onNavigate }) {
           )}
         </div>
       ) : (
-        <div className={view === 'grid' ? 'item-grid' : 'item-list'}>
-          {items.map((item) => (
-            <ItemCard
-              key={item.id}
-              item={item}
-              categories={categories}
-              categoryIds={itemCats[item.id] ?? NO_CATEGORIES}
-              view={view}
-              onOpen={openItem}
-              onStar={toggleStar}
-              onDone={toggleDone}
-              onTag={toggleTag}
-            />
-          ))}
+        <div className={view === 'grid' ? 'item-grid' : 'item-list'} ref={gridRef}>
+          {items.map((item, i) => {
+            /* 이번에 처음 보이는 카드만 떠오른다. 이미 있던 카드는 자리만 옮긴다(FLIP).
+               🔴 판정을 한 번 정하고 **그대로 기억한다.** 매번 다시 물으면, 목록이 한 번 더
+                  그려질 때(개수·소속을 뒤이어 받아 오면 늘 그렇다) 방금 뜨던 카드가
+                  '이미 본 것' 이 되어 클래스가 떨어지고 애니메이션이 중간에 잘린다.
+               🔴 렌더 중에 적는다 — effect 로 미루면 그 사이 렌더에서 또 '새 것' 이 된다.
+                  화면에 그리지 않는 기억이라 렌더 중에 만져도 안전하다. */
+            if (!firstSeen.current.has(item.id)) firstSeen.current.set(item.id, true)
+            const fresh = firstSeen.current.get(item.id) === true
+            return (
+              <ItemCard
+                key={item.id}
+                item={item}
+                categories={categories}
+                categoryIds={itemCats[item.id] ?? NO_CATEGORIES}
+                view={view}
+                onOpen={openItem}
+                onStar={toggleStar}
+                onDone={toggleDone}
+                onTag={toggleTag}
+                enter={fresh}
+                delay={staggerDelay(i)}
+                saved={item.id === savedId}
+              />
+            )
+          })}
         </div>
       )}
 
@@ -892,9 +928,18 @@ export default function Archive({ session, onNavigate }) {
           slots={slots}
           userId={session.user.id}
           onClose={() => setModalItem(undefined)}
-          onSaved={(warn) => {
+          onSaved={(warn, savedItemId) => {
             setModalItem(undefined)
             refresh()
+            /* 저장한 카드가 목록에 들어앉는 것을 보여 준다 (0.95 → 1 + 테두리).
+               🔴 저장한 카드는 '떠오르기'(card-in)를 건너뛴다. 둘 다 걸리면 12px 떠오르며
+                  동시에 커져서 한 번 튀는 것처럼 보인다 — 들어앉는 쪽만 남긴다. */
+            if (savedItemId) {
+              firstSeen.current.set(savedItemId, false)
+              setSavedId(savedItemId)
+              // 테두리는 잠깐만. 남겨 두면 '이 카드가 뭔가 다르다' 는 잘못된 뜻이 된다.
+              setTimeout(() => setSavedId((cur) => (cur === savedItemId ? null : cur)), 1200)
+            }
             // 모달이 닫히므로 인라인 문구로는 전할 수 없는 것만 토스트로 올라온다
             // (지금은 items.files 열이 없어 첨부를 못 붙인 경우뿐이다)
             if (warn) toast.error(warn)

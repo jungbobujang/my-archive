@@ -141,6 +141,13 @@ function makeQuery(table) {
     not(col, op, val) { q._filters.push(['not', col, op, val]); return q },
     is(col, val) { q._filters.push(['is', col, val]); return q },
     in(col, vals) { q._filters.push(['in', col, vals]); return q },
+    // Archive 의 검색이 쓰는 or(). 🔴 거르지는 않는다 — 이 가짜의 일은 '쿼리가 죽지 않게'
+    //    하는 것이고, 검색 결과 자체는 여기서 재는 대상이 아니다.
+    or() { return q },
+    // 아래 셋은 거르지 않고 통과시킨다 — 이 가짜의 일은 쿼리가 죽지 않게 하는 것이다
+    gt() { return q },
+    gte() { return q },
+    lt() { return q },
     order() { return q },
     range() { return q },
     single() { q._single = true; return q },

@@ -4,6 +4,7 @@ import {
   supabase, filePathsOf, parseImages, removeStorageFiles, removeStorageImages
 } from '../supabase.js'
 import { useEscapeKey } from '../hooks.js'
+import { useFlip, playOnce } from '../motion.js'
 import { SkeletonRows } from './Skeleton.jsx'
 
 function deletedLabel(iso) {
@@ -30,6 +31,16 @@ export default function Trash({ onClose, onChanged }) {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  /* 줄 하나가 빠지면 나머지가 위로 올라온다. 그 이동을 미끄러지게 한다(FLIP).
+     🔴 '몇 개 남았나' 를 세고 있는 화면이라, 줄이 순간이동하면 방금 무엇을 지웠는지
+        놓친다 — 지운 줄이 사라지는 것과 나머지가 메우는 것이 이어져 보여야 한다. */
+  const listRef = useFlip([rows.map((r) => r.id).join(',')])
+
+  // 지울 줄을 먼저 축소·페이드로 빼고 나서 목록에서 뺀다 (모션 끄면 곧바로 진행된다)
+  async function fadeRow(id) {
+    await playOnce(listRef.current?.querySelector(`[data-flip-key="${id}"]`), 'card-out')
+  }
 
   useEscapeKey(handleClose, !busy)
 
@@ -98,9 +109,9 @@ export default function Trash({ onClose, onChanged }) {
               <button className="btn-danger btn-sm" onClick={purgeAll} disabled={busy}>전부 비우기</button>
             </div>
 
-            <ul className="cm-list">
+            <ul className="cm-list" ref={listRef}>
               {rows.map((item) => (
-                <li key={item.id} className="trash-row">
+                <li key={item.id} className="trash-row" data-flip-key={item.id}>
                   <div className="trash-main">
                     <span className="trash-title">{item.title}</span>
                     <span className="trash-date">{deletedLabel(item.deleted_at)}</span>

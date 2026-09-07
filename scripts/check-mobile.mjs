@@ -480,6 +480,164 @@ check('375px(파일): 용량이 붙어 있다', f.fileSizes.join(' ') === '2.3MB
   await page.close()
 }
 
+/* ── 모션 ────────────────────────────────────────────────────────────
+   카드 49장을 띄워 놓고 네 가지를 잰다.
+     ① 등장이 스태거로 걸리는가 (25ms 씩, 12장까지만)
+     ② 자리가 바뀔 때 FLIP 으로 미끄러지는가 (순간이동이 아닌가)
+     ③ 49장이 움직이는 동안 프레임이 버티는가
+     ④ prefers-reduced-motion: reduce 면 **전부** 꺼지는가
+   🔴 ④ 가 이 묶음의 핵심이다. 나머지는 취향이지만 이건 접근성이고, 켜 둔 사람에게
+      '조금 줄인 애니메이션' 은 여전히 어지럼증을 부른다. */
+{
+  const page = await browser.newPage()
+  await page.setViewport({ width: 1280, height: 900 })
+  await page.goto(`${base}?mode=motion`, { waitUntil: 'networkidle0' })
+  await page.waitForSelector('.card', { timeout: 15000 })
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+  // ① 스태거 — 카드마다 animation-delay 가 25ms 씩 늘고, 12장 뒤부터는 0
+  const stag = await page.evaluate(() => {
+    const els = [...document.querySelectorAll('.card')]
+    const ms = (v) => Math.round(parseFloat(v) * (v.includes('ms') ? 1 : 1000))
+    return {
+      count: els.length,
+      inClass: els.filter((e) => e.classList.contains('card-in')).length,
+      delays: els.slice(0, 14).map((e) => ms(getComputedStyle(e).animationDelay)),
+      dur: ms(getComputedStyle(els[0]).animationDuration),
+      name: getComputedStyle(els[0]).animationName,
+      // 성능 가드: 움직이는 것이 transform·opacity 뿐인가
+      keyframeProps: (() => {
+        for (const sheet of document.styleSheets) {
+          let rules; try { rules = sheet.cssRules } catch { continue }
+          for (const r of rules || []) {
+            if (r.type === CSSRule.KEYFRAMES_RULE && ['card-in', 'card-out', 'card-saved'].includes(r.name)) {
+              for (const k of r.cssRules) {
+                for (const prop of k.style) {
+                  if (!['transform', 'opacity'].includes(prop)) return prop  // 레이아웃 속성이 섞였다
+                }
+              }
+            }
+          }
+        }
+        return 'ok'
+      })()
+    }
+  })
+  check('모션: 카드 49장', stag.count === 49, stag.count)
+  check('모션: 등장이 걸린다', stag.inClass === 49, stag.inClass)
+  check('모션: 150~250ms 안', stag.dur >= 150 && stag.dur <= 250, stag.dur + 'ms')
+  check('모션: 스태거 25ms 씩', stag.delays.slice(0, 12).every((d, i) => d === i * 25),
+    stag.delays.slice(0, 12).join(','))
+  check('모션: 12장 뒤는 지연 없음', stag.delays.slice(12).every((d) => d === 0),
+    stag.delays.slice(12).join(','))
+  check('모션: transform·opacity 만 움직인다', stag.keyframeProps === 'ok', stag.keyframeProps)
+
+  // ② hover — 2px 들림
+  //    🔴 :hover 는 합성 이벤트로 안 걸린다. 스타일시트에서 규칙을 직접 읽는다.
+  //    🔴 일치하는 규칙을 **전부** 모은다 — 뒤쪽 reduced-motion 블록에도 .card:hover 가 있어서
+  //       마지막 하나만 보면 언제나 'none' 을 읽는다 (그 자리에서 한 번 헛짚었다).
+  const hoverRules = await page.evaluate(() => {
+    const out = []
+    const walk = (rules, inMedia) => {
+      for (const r of rules || []) {
+        if (r.type === CSSRule.MEDIA_RULE) walk(r.cssRules, r.conditionText || '')
+        else if (r.selectorText === '.card:hover' && r.style.transform) {
+          out.push({ media: inMedia, transform: r.style.transform })
+        }
+      }
+    }
+    for (const sheet of document.styleSheets) {
+      let rules; try { rules = sheet.cssRules } catch { continue }
+      walk(rules, '')
+    }
+    return out
+  })
+  check('모션: hover 에 2px 들림 규칙이 있다',
+    hoverRules.some((r) => /-2px/.test(r.transform) && /hover/.test(r.media)),
+    JSON.stringify(hoverRules))
+  check('모션: 터치 기기에는 hover 들림을 안 건다',
+    hoverRules.filter((r) => /-2px/.test(r.transform)).every((r) => /hover: *hover/.test(r.media)),
+    JSON.stringify(hoverRules.map((r) => r.media)))
+
+  // ③ FLIP — 자리가 바뀌면 인라인 transform 이 잠깐 걸린다(=미끄러지는 중)
+  await page.evaluate('window.__motion.settle()')
+  await sleep(300)
+  /* 🔴 한 프레임만 집으면 안 된다. FLIP 은 '되돌려 놓기(transition:none)' 와
+     '놓아주기(transition:transform)' 가 연속된 두 프레임에 걸쳐 일어나서, 어느 한쪽을
+     찍으면 다른 쪽을 못 본다. 20프레임을 훑어 그 둘이 다 있었는지를 본다. */
+  const flip = await page.evaluate(async () => {
+    const first = document.querySelector('[data-flip-key]')
+    const key = first.getAttribute('data-flip-key')
+    const y0 = first.getBoundingClientRect().top
+    window.__motion.shuffle()
+    const frames = []
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => requestAnimationFrame(r))
+      const el = document.querySelector(`[data-flip-key="${key}"]`)
+      if (!el) continue
+      frames.push({ tr: el.style.transform, trans: el.style.transition,
+        top: el.getBoundingClientRect().top })
+    }
+    await new Promise((r) => setTimeout(r, 400))
+    const end = document.querySelector(`[data-flip-key="${key}"]`)
+    return { y0, frames, endY: end.getBoundingClientRect().top, endTr: end.style.transform }
+  })
+  const inverted = flip.frames.find((f) => /translate/.test(f.tr || ''))
+  check('FLIP: 이동 중 transform 이 걸린다', !!inverted, inverted && inverted.tr)
+  check('FLIP: transform 만 트랜지션한다',
+    flip.frames.some((f) => /^transform [0-9]+ms/.test(f.trans || '')),
+    JSON.stringify([...new Set(flip.frames.map((f) => f.trans))]))
+  check('FLIP: 되돌린 자리가 옛 자리다',
+    inverted && Math.abs(inverted.top - flip.y0) < 3,
+    inverted && `${Math.round(inverted.top)} vs ${Math.round(flip.y0)}`)
+  check('FLIP: 끝나면 인라인 값이 걷힌다', !flip.endTr, JSON.stringify(flip.endTr))
+  check('FLIP: 실제로 자리가 바뀌었다', Math.abs(flip.endY - flip.y0) > 20,
+    `${Math.round(flip.y0)} → ${Math.round(flip.endY)}`)
+
+  // ③-2 프레임 — 49장이 한꺼번에 움직이는 동안 긴 프레임이 몇 번인가
+  const frames = await page.evaluate(async () => {
+    const gaps = []
+    let last = performance.now()
+    let stop = false
+    const tick = (t) => { gaps.push(t - last); last = t; if (!stop) requestAnimationFrame(tick) }
+    requestAnimationFrame(tick)
+    window.__motion.shuffle()
+    await new Promise((r) => setTimeout(r, 500))
+    stop = true
+    const long = gaps.filter((g) => g > 34).length      // 30fps 밑으로 떨어진 프레임
+    return { n: gaps.length, long, worst: Math.round(Math.max(...gaps)) }
+  })
+  check('모션: 49장 이동에도 프레임이 버틴다', frames.long <= 2,
+    `긴 프레임 ${frames.long}/${frames.n} · 최악 ${frames.worst}ms`)
+
+  // ④ reduced-motion — 전부 꺼진다
+  await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
+  await page.reload({ waitUntil: 'networkidle0' })
+  await page.waitForSelector('.card', { timeout: 15000 })
+  const off = await page.evaluate(async () => {
+    const el = document.querySelector('.card')
+    const cs = getComputedStyle(el)
+    const before = el.getBoundingClientRect().top
+    window.__motion.settle()
+    await new Promise((r) => setTimeout(r, 200))
+    const first = document.querySelector('[data-flip-key]')
+    const key = first.getAttribute('data-flip-key')
+    window.__motion.shuffle()
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    const moved = document.querySelector(`[data-flip-key="${key}"]`)
+    return {
+      anim: cs.animationName, dur: cs.animationDuration, trans: cs.transitionDuration,
+      inlineTr: moved.style.transform, before
+    }
+  })
+  check('reduced-motion: 등장 애니메이션 0', off.anim === 'none' || off.dur === '0s',
+    `${off.anim} / ${off.dur}`)
+  check('reduced-motion: 트랜지션 0', /^0s(, 0s)*$/.test(off.trans), off.trans)
+  check('reduced-motion: FLIP 도 안 건다', !off.inlineTr, JSON.stringify(off.inlineTr))
+  await page.screenshot({ path: path.join(outDir, 'motion-1280.png') })
+  await page.close()
+}
+
 const fw = await shot('modal-1280-files', `${base}?mode=files`, 1280, 900, '.file-drop')
 check('1280px(파일): 가로 스크롤 없음', fw.docScrollW <= 1280, fw.docScrollW)
 check('1280px(파일): 긴 이름이 ✕ 를 덮지 않는다', fw.fileNameOverlapsX === false)

@@ -4,6 +4,8 @@ import React from 'react'
 import { createRoot } from 'react-dom/client'
 import ItemModal from '../../src/components/ItemModal.jsx'
 import LockScreen from '../../src/components/LockScreen.jsx'
+import ItemCard from '../../src/components/ItemCard.jsx'
+import { useFlip, staggerDelay } from '../../src/motion.js'
 import '../../src/styles.css'
 
 const params = new URLSearchParams(location.search)
@@ -69,6 +71,49 @@ if (mode === 'multi') {
     splitMode: true
   }))
 }
+
+/* 모션 점검용 화면 — 카드 49장.
+   🔴 Archive 를 통째로 띄우지 않는다. 그러려면 로그인·Supabase 를 흉내 내야 하고, 그건
+      모션과 아무 상관이 없다. 여기서 재려는 것은 **카드 목록이 어떻게 움직이는가** 뿐이라
+      ItemCard(순수 컴포넌트)와 같은 규칙(등장·스태거·FLIP)을 그대로 얹어 그린다.
+   49장인 이유: 성능 가드 기준이 그 수다 (스태거는 12장까지만 걸리는 것도 여기서 본다). */
+if (mode === 'motion') {
+  const cards = Array.from({ length: 49 }, (_, i) => ({
+    id: `m${i + 1}`, title: `카드 ${i + 1}`, content: '모션 점검용 항목입니다.',
+    link_url: null, image_url: null, tags: i % 3 === 0 ? ['태그'] : [],
+    status: 'none', created_at: new Date(2026, 0, 1).toISOString(), starred: false
+  }))
+  function MotionDemo() {
+    const [list, setList] = React.useState(cards)
+    const [savedId, setSavedId] = React.useState(null)
+    const [fresh, setFresh] = React.useState(true)
+    const gridRef = useFlip([list.map((c) => c.id).join(',')])
+    // 점검 스크립트가 부를 손잡이 — 필터 전환(FLIP)·저장 강조·삭제를 흉내 낸다
+    React.useEffect(() => {
+      window.__motion = {
+        shuffle: () => setList((cur) => [...cur].reverse()),
+        filter: (n) => setList(cards.slice(0, n)),
+        all: () => setList(cards),
+        save: (id) => setSavedId(id),
+        settle: () => setFresh(false)
+      }
+    }, [])
+    return (
+      <div className="archive" style={{ padding: 16 }}>
+        <div className="item-grid" ref={gridRef}>
+          {list.map((it, i) => (
+            <ItemCard
+              key={it.id} item={it} categories={[]} categoryIds={[]} view="grid"
+              onOpen={() => {}} onStar={() => {}} onDone={() => {}} onTag={() => {}}
+              enter={fresh} delay={staggerDelay(i)} saved={it.id === savedId}
+            />
+          ))}
+        </div>
+      </div>
+    )
+  }
+  createRoot(document.getElementById('root')).render(<MotionDemo />)
+} else
 
 // 잠금 화면은 모달이 아니라 화면 전체를 덮는 것이라 따로 그린다.
 // 뒤에 글자를 한 무더기 깔아 두고 그린다 — 가림막이 정말 불투명한지,

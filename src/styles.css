@@ -368,6 +368,54 @@ a:focus-visible {
 .cat-border-green  { border-left-color: var(--c-green-mid); }
 
 .card:hover { border-color: var(--ink-faint); }
+
+/* ---------- 모션 ----------
+   원칙: 150~250ms · ease-out · 목적은 피드백(장식 금지) · transform/opacity 만.
+   끄는 스위치는 이 파일 맨 아래 prefers-reduced-motion 한 곳에 모아 두었다. */
+:root {
+  --mo-dur: 180ms;
+  --mo-ease: cubic-bezier(.2, .8, .3, 1);
+}
+
+/* ① 카드 등장 — 아래서 12px 떠오르며 페이드인. 지연은 JS 가 --i 로 넣는다(최대 12장). */
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: none; }
+}
+.card-in {
+  animation: card-in var(--mo-dur) var(--mo-ease) both;
+  animation-delay: var(--i, 0ms);
+}
+
+/* ② hover — 2px 들림 + 그림자 한 단계.
+   🔴 hover 가 있는 기기에서만. 터치에서는 hover 가 '탭한 뒤 남아 있는 상태' 로 굳어서,
+      누른 카드가 계속 떠 있는 것처럼 보인다. */
+@media (hover: hover) and (pointer: fine) {
+  .card { transition: transform var(--mo-dur) var(--mo-ease), box-shadow var(--mo-dur) var(--mo-ease), border-color .15s ease; }
+  .card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0, 0, 0, .10); }
+}
+
+/* ③ 저장 직후 — 그 카드가 목록 제자리로 들어앉는다 (0.95 → 1) + 잠깐 테두리 강조.
+   🔴 '저장됐다' 를 토스트로만 말하면 어디에 들어갔는지는 알 수 없다. 눈이 그 자리를
+      한 번 보게 만드는 것이 이 모션의 전부다. */
+@keyframes card-saved {
+  from { transform: scale(.95); }
+  to   { transform: none; }
+}
+.card-saved {
+  animation: card-saved var(--mo-dur) var(--mo-ease) both;
+  outline: 2px solid var(--c-teal-mid);
+  outline-offset: -1px;
+  transition: outline-color .5s ease .35s;
+}
+.card-saved-fade { outline-color: transparent; }
+
+/* ⑦ 삭제 — 축소되며 사라진다. 그 뒤 남은 카드들이 FLIP 으로 자리를 메운다. */
+@keyframes card-out {
+  from { opacity: 1; transform: none; }
+  to   { opacity: 0; transform: scale(.92); }
+}
+.card-out { animation: card-out var(--mo-dur) var(--mo-ease) both; pointer-events: none; }
 .card-row { flex-direction: row; }
 .card-row .card-thumb { width: 96px; flex-shrink: 0; }
 .card-row .card-thumb img { height: 100%; }
@@ -2127,4 +2175,40 @@ a.card-thumb { cursor: pointer; }
   .share-title { font-size: 19px; }
   .share-row { flex-wrap: wrap; }
   .share-row-main { flex-basis: 100%; }
+}
+
+/* ---------- 모션 (2) — 빠른 저장·썸네일 이동·모션 끄기 ---------- */
+
+/* ⑤ 빠른 저장 성공 — 입력줄이 한 번 뛰고, 체크가 잠깐 떴다 사라진다.
+   🔴 토스트만 두면 화면 구석에서 뜨고 지는 것이라, 방금 친 줄이 비워진 것이
+      '저장된 것' 인지 '지워진 것' 인지 눈으로는 구분이 안 된다. */
+@keyframes quick-pulse {
+  0%   { transform: none; }
+  45%  { transform: scale(1.012); }
+  100% { transform: none; }
+}
+.quick-ok {
+  animation: quick-pulse 220ms var(--mo-ease) both;
+  border-color: var(--c-teal-mid);
+  border-style: solid;
+}
+.quick-check {
+  flex: none;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--c-teal-mid);
+  animation: card-in 150ms var(--mo-ease) both;
+}
+
+/* ⑥ 썸네일 순서 이동 — 실제 미끄러짐은 FLIP(JS)이 만들고, 여기서는 고른 표시만 맡는다.
+   전환 중에 outline 이 같이 움직이면 잔상이 생겨서 transform 만 둔다. */
+.img-thumb { transition: box-shadow var(--mo-dur) var(--mo-ease), border-color var(--mo-dur) var(--mo-ease); }
+
+/* 🔴 모션 끄기 — 한 곳에 모은다. 여기저기 흩어 두면 새 모션을 넣을 때마다 빠뜨린다.
+   'reduce' 를 켠 사람에게 '조금 줄인 애니메이션' 은 여전히 어지럼증을 부른다. 전부 끈다. */
+@media (prefers-reduced-motion: reduce) {
+  .card-in, .card-saved, .card-out, .quick-ok, .quick-check { animation: none !important; }
+  .card-saved { outline-color: var(--c-teal-mid); }
+  .card, .img-thumb { transition: none !important; }
+  .card:hover { transform: none !important; box-shadow: none !important; }
 }

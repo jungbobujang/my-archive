@@ -16,7 +16,13 @@ function formatDate(iso) {
   return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}`
 }
 
-function ItemCard({ item, categories, categoryIds, view, onOpen, onStar, onTag, onDone }) {
+/* enter  이번에 목록에 새로 들어온 카드인가 (등장 모션을 줄지)
+   delay  그 등장이 몇 ms 뒤에 시작하는지 (스태거 — Archive 가 계산해서 넘긴다)
+   saved  방금 저장해서 들어온 그 카드인가 (제자리로 들어앉는 모션 + 테두리 강조)
+   🔴 모션 판단을 카드가 스스로 하지 않는다. '새로 들어왔나' 는 목록 전체를 아는 쪽만
+      알 수 있고, 카드가 각자 판단하면 다시 그려질 때마다 매번 떠오른다. */
+function ItemCard({ item, categories, categoryIds, view, onOpen, onStar, onTag, onDone,
+  enter = false, delay = 0, saved = false }) {
   // 소속 순서는 categories 정렬(position)을 따른다
   const own = (categories ?? []).filter((c) => (categoryIds ?? []).includes(c.id))
   const shown = own.slice(0, 3)
@@ -34,7 +40,14 @@ function ItemCard({ item, categories, categoryIds, view, onOpen, onStar, onTag, 
   const fileCount = parseFiles(item.files).length
 
   return (
-    <article className={`card cat-border-${color} ${view === 'list' ? 'card-row' : ''} ${done ? 'card-done' : ''}`}>
+    <article
+      className={`card cat-border-${color} ${view === 'list' ? 'card-row' : ''} ${done ? 'card-done' : ''}`
+        + `${enter ? ' card-in' : ''}${saved ? ' card-saved' : ''}`}
+      /* FLIP 이 자리를 재는 열쇠. 🔴 key 와 달리 DOM 속성이라, 자리를 잰 뒤에도
+         브라우저에서 그대로 읽을 수 있다 (모션 점검도 이 값을 본다). */
+      data-flip-key={item.id}
+      style={enter && delay ? { '--i': `${delay}ms` } : undefined}
+    >
       {cover && (
         firstLink ? (
           <a

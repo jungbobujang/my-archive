@@ -11,6 +11,7 @@ import {
 } from '../src/supabase.js'
 import { moveItem, LONG_PRESS_MS, DRAG_THRESHOLD_PX, CANCEL_MOVE_PX } from '../src/reorder.js'
 import { store, resetStore } from './fake-supabase.mjs'
+import { DUR_MS, STAGGER_MS, STAGGER_MAX, staggerDelay, playOnce } from '../src/motion.js'
 
 // a.click() 으로 내려받기를 흉내 낼 때 jsdom 이 '이동은 구현 안 됨' 을 찍는다. 판정과 무관하다.
 const vc = new VirtualConsole()
@@ -27,6 +28,12 @@ for (const k of ['document', 'navigator', 'HTMLElement', 'HTMLInputElement', 'Ev
 }
 globalThis.window = window
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
+/* jsdom 에는 matchMedia 가 없다. theme.js 는 뜨자마자 그것을 부르고(다크 모드 판정),
+   모션 코드도 reduced-motion 을 그것으로 묻는다. 기본값(안 켬)을 깔아 둔다 —
+   모션 점검이 잠깐 바꿔서 'reduce 를 켠 사람' 을 흉내 낸 뒤 이 값으로 되돌린다. */
+const NO_MATCH = (qq) => ({ matches: false, media: String(qq),
+  addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} })
+if (!window.matchMedia) window.matchMedia = NO_MATCH
 process.on('unhandledRejection', () => {})
 
 // 점검은 네트워크 없이 돌아야 한다. 제목 자동 생성(noembed)이 바깥으로 나가면 판정이
@@ -41,6 +48,7 @@ const ItemModal = (await import('../src/components/ItemModal.jsx')).default
 const Trash = (await import('../src/components/Trash.jsx')).default
 const Settings = (await import('../src/components/Settings.jsx')).default
 const { ToastProvider } = await import('../src/components/Toast.jsx')
+const Archive = (await import('../src/components/Archive.jsx')).default
 
 // 초안 디바운스가 한 번 돌 만큼 기다린다. 링크가 늘어 효과가 한 번 더 도는 경우까지 본다.
 const settle = (times = 2) => act(async () => {
@@ -1541,8 +1549,84 @@ const imagesBucket = () => store.buckets['archive-images']
     qa(again.host, '.file-row[data-reorder-index]').length === 0)
   act(() => { again.root.unmount() })
 
-  window.matchMedia = realMM
+  window.matchMedia = realMM || NO_MATCH
   resetStore()
+}
+
+// ── 14. 모션 배선 (jsdom) ───────────────────────────────────
+//   브라우저 점검(check:mobile)이 '어떻게 움직이는가' 를 재고, 여기서는 '언제 걸리는가' 를 본다.
+//   🔴 등장을 새 카드에만 거는 것이 요점이다. 목록을 다시 그릴 때마다 전부 떠오르면
+//      그건 피드백이 아니라 소음이고, 검색어를 칠 때마다 화면이 출렁인다.
+{
+  resetStore()
+  window.sessionStorage.clear()
+  const mk = (n) => Array.from({ length: n }, (_, i) => ({
+    id: `it${i + 1}`, user_id: 'u1', title: `항목 ${i + 1}`, content: '', tags: [],
+    link_url: null, image_url: null, files: [], status: 'none', deleted_at: null,
+    created_at: new Date(2026, 0, 1).toISOString(), updated_at: new Date(2026, 0, 1).toISOString()
+  }))
+  store.rows.items.push(...mk(15))
+  // 🔴 기본 탭은 '오늘' 이다 — 카드 목록은 '보관함' 탭에 있다
+  window.localStorage.setItem('archive-tab', 'archive')
+  const m = mount(React.createElement(ToastProvider, null,
+    React.createElement(Archive, { session: { user: { id: 'u1', email: 'a@b.c' } }, onNavigate: () => {} })))
+  await act(async () => {})
+  await act(async () => {})
+
+  const cards = () => qa(m.host, '.card')
+  check('모션: 카드가 그려진다', cards().length > 0, cards().length)
+  check('모션: 첫 그림에는 등장이 걸린다', cards().every((c) => c.classList.contains('card-in')),
+    cards().filter((c) => !c.classList.contains('card-in')).length + '개 빠짐')
+  const delays = cards().map((c) => c.style.getPropertyValue('--i'))
+  check('모션: 스태거가 25ms 씩', delays.slice(0, 12).every((d, i) => d === (i === 0 ? '' : `${i * 25}ms`)),
+    delays.slice(0, 13).join('|'))
+  check('모션: 12장 뒤로는 지연 없음', delays.slice(12).every((d) => d === ''), delays.slice(12).join('|'))
+  check('모션: FLIP 열쇠가 붙는다', cards().every((c) => c.getAttribute('data-flip-key')))
+
+  /* 다시 그려도 판정이 흔들리지 않는가.
+     🔴 목록은 처음 뜬 뒤에도 여러 번 다시 그려진다(개수·소속을 뒤이어 받아 온다).
+        그때마다 '새 카드' 판정을 다시 하면 등장 클래스가 붙었다 떨어졌다 하면서
+        애니메이션이 중간에 잘린다 — 판정은 카드마다 한 번이어야 한다.
+        (이 자리에서 실제로 그렇게 잘렸고, 그래서 판정을 기억하도록 고쳤다.) */
+  const snap = () => cards().map((c) => c.getAttribute('data-flip-key') + ':'
+    + (c.classList.contains('card-in') ? 'in' : '-') + ':' + c.style.getPropertyValue('--i')).join(',')
+  const before = snap()
+  /* 🔴 다시 그리게 만드는 방법으로 **목록이 안 바뀌는 것**을 고른다. '중요' 필터를 누르면
+     목록 자체가 비어 버려서(중요 표시한 항목이 없다) 판정이 아니라 데이터가 바뀐다.
+     보기 전환(갤러리↔리스트)은 같은 카드를 그대로 두고 다시 그린다. */
+  await act(async () => { qa(m.host, '.view-toggle button')[1]?.click() })
+  await act(async () => {})
+  const after = snap()
+  check('모션: 다시 그려도 등장 판정이 그대로다', after === before, after === before ? '' : after.slice(0, 120))
+
+  /* 🔴 빠른 저장 펄스(⑤)는 여기서 재지 않는다 — 재는 방법이 없어서가 아니라,
+     jsdom + React 제어 입력에서 **값 주입이 state 로 들어가지 않기** 때문이다
+     (네이티브 setter 를 거쳐도 그렇다. 같은 트리의 버튼 클릭은 정상으로 돈다 —
+     위 '중요' 칩이 그 증거다). 억지로 흉내 내면 재는 것은 화면이 아니라 우리 흉내다.
+     클래스가 실제로 있고 규칙대로 도는지는 브라우저 점검(mode=motion)이 본다. */
+  check('모션: 빠른 저장 줄이 있다', !!q(m.host, '.quick-row input'))
+  check('모션: 저장 전에는 체크가 없다', q(m.host, '.quick-check') === null)
+  act(() => { m.root.unmount() })
+  resetStore()
+}
+
+// ── 14-b. 모션 규칙 자체 ────────────────────────────────────
+{
+  check('모션: 지속시간이 150~250ms 안', DUR_MS >= 150 && DUR_MS <= 250, DUR_MS)
+  check('모션: 스태거 25ms · 12장', STAGGER_MS === 25 && STAGGER_MAX === 12, `${STAGGER_MS}/${STAGGER_MAX}`)
+  check('모션: 12번째까지만 밀린다', staggerDelay(11) === 275 && staggerDelay(12) === 0,
+    `${staggerDelay(11)} / ${staggerDelay(12)}`)
+  // reduced-motion 이면 지연도 0 이고 playOnce 도 곧바로 끝난다(클래스를 붙이지 않는다)
+  const realMM = window.matchMedia
+  window.matchMedia = (qq) => ({ matches: String(qq).includes('reduced-motion'), media: qq,
+    addEventListener() {}, removeEventListener() {} })
+  check('reduced-motion: 스태거 0', staggerDelay(5) === 0, staggerDelay(5))
+  const el = document.createElement('div')
+  const t0 = Date.now()
+  await playOnce(el, 'card-out')
+  check('reduced-motion: 사라지는 모션도 안 건다',
+    !el.classList.contains('card-out') && Date.now() - t0 < 50, el.className)
+  window.matchMedia = realMM
 }
 
 // ── 요약 ────────────────────────────────────────────────────
