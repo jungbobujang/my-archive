@@ -140,8 +140,16 @@ export const BLOCKED_EXTS = [
 ]
 export const BLOCKED_FILE_MESSAGE = '실행 파일은 첨부할 수 없습니다'
 // 무료 플랜 기준. 게이지 표시에만 쓰고, 넘는다고 막지는 않는다 (실제 상한은 Supabase 가 건다).
+// 🔴 이 한도는 **프로젝트 전체 스토리지 합계**에 걸린다 — 파일 버킷과 이미지 버킷을
+//    따로 세지 않는다. 그래서 게이지도 둘을 더해서 보여 준다. 파일만 세면 실제보다
+//    적게 보이고, 적게 보이는 게이지는 없느니만 못하다(안심시키고 나서 터진다).
 export const STORAGE_QUOTA_BYTES = 1024 * 1024 * 1024
 export const STORAGE_WARN_RATIO = 0.8
+// 화면에 적는 한도 문구. 🔴 숫자를 화면에 손으로 적지 않는다 — 한도를 바꾸는 날
+// 상수만 고치고 문구는 그대로 두면, 게이지와 설명이 서로 다른 말을 하게 된다.
+export const STORAGE_QUOTA_LABEL = STORAGE_QUOTA_BYTES >= 1024 * 1024 * 1024
+  ? `${Math.round(STORAGE_QUOTA_BYTES / 1024 / 1024 / 1024)}GB`
+  : `${Math.round(STORAGE_QUOTA_BYTES / 1024 / 1024)}MB`
 
 // 아는 형식은 아는 얼굴로, 모르는 형식은 **범용 문서 아이콘**으로 — 빈칸은 만들지 않는다.
 // 확장자가 자유로워진 뒤로 여기 없는 이름이 들어오는 것이 정상이 되었으므로,
@@ -280,6 +288,37 @@ export function filePathsOf(item) {
 export function totalFileBytes(items) {
   let sum = 0
   for (const it of items ?? []) for (const f of parseFiles(it?.files)) sum += f.size
+  return sum
+}
+
+// 이미지가 차지한 용량.
+//
+// 🔴 파일과 달리 **DB 에 크기가 없다.** 이미지는 항목에 공개 URL 문자열로만 붙어 있어서
+//    (표를 따로 두지 않았다) 버킷에 직접 물어보는 수밖에 없다.
+// 🔴 그런데 그게 비싸지 않다 — 이미지 키는 `${userId}/…` 라 **사용자마다 폴더 하나**다.
+//    요청 한 번(1,000개 넘으면 그만큼 더)이면 끝난다. 파일 버킷(archive-files)은 항목마다
+//    폴더가 갈려서 같은 방법을 쓰면 항목 수만큼 요청이 붙는다 — 그래서 파일은 지금처럼
+//    items.files 의 size 를 더한다.
+// 🔴 여기에는 항목에서 지웠지만 버킷에 남은 이미지(고아)도 들어간다. **그게 맞다.**
+//    Supabase 의 한도는 버킷에 실제로 올라가 있는 바이트를 세지, 우리 화면이 참조하는
+//    것만 세지 않는다. 게이지는 청구서와 같은 것을 세야 한다.
+const IMAGE_LIST_PAGE = 1000
+export async function totalImageBytes(userId) {
+  // 🔴 모르면 0 이 아니라 null 이다. 0 은 '안 썼다' 는 주장이라, 로그인 정보가 없는
+  //    상태에서 그렇게 답하면 게이지가 없는 사실을 말하게 된다.
+  if (!supabase || !userId) return null
+  let sum = 0
+  for (let offset = 0; ; offset += IMAGE_LIST_PAGE) {
+    const { data, error } = await supabase.storage.from(BUCKET).list(String(userId), {
+      limit: IMAGE_LIST_PAGE,
+      offset,
+      sortBy: { column: 'name', order: 'asc' }
+    })
+    if (error) throw error
+    const rows = data ?? []
+    for (const o of rows) sum += Number(o?.metadata?.size) || 0
+    if (rows.length < IMAGE_LIST_PAGE) break
+  }
   return sum
 }
 

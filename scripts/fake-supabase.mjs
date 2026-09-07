@@ -24,7 +24,7 @@ export const store = {
   anon: false,
   // 서버 시각. share_view 의 만료 판정은 이 값으로 한다 (받는 사람 시계가 아니다).
   now: () => Date.now(),
-  calls: { upload: [], remove: [], signed: [], rpc: [] }
+  calls: { upload: [], remove: [], signed: [], rpc: [], list: [] }
 }
 
 export function resetStore() {
@@ -35,7 +35,8 @@ export function resetStore() {
   store.uploadGuard = null
   store.anon = false
   store.now = () => Date.now()
-  store.calls = { upload: [], remove: [], signed: [], rpc: [] }
+  store.calls = { upload: [], remove: [], signed: [], rpc: [], list: [] }
+  store.listError = null
 }
 resetStore()
 
@@ -74,6 +75,23 @@ function storageApi(bucketId) {
       store.calls.remove.push({ bucket: bucketId, paths: [...paths] })
       for (const p of paths) bucketOf(bucketId).delete(p)
       return { data: null, error: null }
+    },
+    // 폴더 안 목록. 저장소 게이지가 이미지 버킷 용량을 여기서 센다.
+    // 진짜 API 처럼 { name, metadata: { size } } 모양으로 돌려주고, 페이지도 흉내 낸다
+    // (limit 만큼 채워서 주면 부르는 쪽이 다음 장을 물어야 한다).
+    async list(prefix, opts = {}) {
+      store.calls.list.push({ bucket: bucketId, prefix, offset: opts.offset ?? 0 })
+      if (store.listError) return { data: null, error: { message: store.listError } }
+      const head = String(prefix ?? '').replace(/\/+$/, '')
+      const rows = []
+      for (const [path, meta] of bucketOf(bucketId)) {
+        if (head && !path.startsWith(head + '/')) continue
+        rows.push({ name: path.slice(head ? head.length + 1 : 0), metadata: { size: meta.size } })
+      }
+      rows.sort((a, b) => a.name.localeCompare(b.name))
+      const from = opts.offset ?? 0
+      const limit = opts.limit ?? 100
+      return { data: rows.slice(from, from + limit), error: null }
     }
   }
 }

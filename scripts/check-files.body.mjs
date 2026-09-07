@@ -5,7 +5,8 @@ import {
   formatBytes, fileIcon, filePathsOf, totalFileBytes, splitByKind,
   imagePathFromUrl, parseImages, MAX_FILES, FILE_MAX_BYTES,
   BLOCKED_EXTS, BLOCKED_FILE_MESSAGE, isBlockedFileName, randomKeyToken, safeExtOf,
-  stripInvisible, saveErrorMessage, byteLength,
+  stripInvisible, saveErrorMessage, byteLength, totalImageBytes,
+  STORAGE_QUOTA_BYTES, STORAGE_QUOTA_LABEL,
   SESSION_EXPIRED_MESSAGE, SAVE_FALLBACK_MESSAGE, DRAFT_DEBOUNCE_MS, DRAFT_MAX_BYTES
 } from '../src/supabase.js'
 import { moveItem, LONG_PRESS_MS, DRAG_THRESHOLD_PX, CANCEL_MOVE_PX } from '../src/reorder.js'
@@ -607,38 +608,105 @@ const imagesBucket = () => store.buckets['archive-images']
 // ── 14. 저장소 사용량 게이지 ────────────────────────────────
 {
   const GB = 1024 * 1024 * 1024
-  const settings = (onClose) => React.createElement(Settings, {
-    email: 'a@b.c', themePref: 'system', onThemeChange: () => {}, onOpenPricing: () => {}, onClose
+  const MB = 1024 * 1024
+  // 🔴 userId 를 넘긴다 — 이미지 용량은 `${userId}/…` 폴더를 물어서 세기 때문이다.
+  //    안 넘기면 이미지 쪽은 '확인 못 함' 이 된다 (그 경우도 아래 ④에서 따로 본다).
+  const settings = (onClose, userId = 'u1') => React.createElement(Settings, {
+    email: 'a@b.c', userId, themePref: 'system',
+    onThemeChange: () => {}, onOpenPricing: () => {}, onClose
   })
 
-  // ① 조금 썼을 때
+  // ① 조금 썼을 때 — 파일과 이미지를 **더해서** 보여 준다.
+  //    🔴 Supabase 의 1GB 는 프로젝트 전체 스토리지에 걸리는 값이다. 파일만 세면
+  //       게이지가 실제보다 적게 나오고, 적게 나오는 게이지는 없느니만 못하다.
   resetStore()
-  store.rows.items.push({ id: 'i1', files: [{ path: 'a/1_가.pdf', name: '가.pdf', size: 12.3 * 1024 * 1024 }] })
+  store.rows.items.push({ id: 'i1', files: [{ path: 'a/1_가.pdf', name: '가.pdf', size: 12.3 * MB }] })
+  imagesBucket().set('u1/1-a.png', { size: 2 * MB })
+  imagesBucket().set('u1/2-b.png', { size: 3 * MB })
+  imagesBucket().set('u2/9-남.png', { size: 500 * MB })   // 남의 폴더는 세지 않는다
   let m = mount(settings(() => {}))
   await act(async () => {})
-  check('게이지: 쓴 용량을 보여 준다', q(m.host, '.set-value')?.textContent.includes('파일 12.3MB / 1GB'),
+  check('게이지: 파일+이미지 합계를 보여 준다',
+    q(m.host, '.set-value')?.textContent.includes('저장소 17.3MB / 1GB'),
     q(m.host, '.set-value')?.textContent)
+  check('게이지: 내역을 괄호로 적는다',
+    q(m.host, '.set-value')?.textContent.includes('(파일 12.3MB · 이미지 5.0MB)'),
+    q(m.host, '.set-value')?.textContent)
+  check('게이지: 남의 폴더는 세지 않는다',
+    !q(m.host, '.set-value')?.textContent.includes('500'), q(m.host, '.set-value')?.textContent)
+  check('게이지: 이미지 버킷을 한 번만 물어본다',
+    store.calls.list.filter((c) => c.bucket === 'archive-images').length === 1,
+    store.calls.list.length)
+  check('게이지: 안내가 무료 플랜 기준을 말한다',
+    m.host.textContent.includes('Supabase 무료 플랜 기준입니다'))
   check('게이지: 80% 아래는 주황이 아니다', !q(m.host, '.gauge-fill')?.classList.contains('gauge-warn'))
   act(() => { m.root.unmount() })
 
-  // ② 80% 를 넘었을 때
+  // ② 80% 를 넘었을 때 — 🔴 이미지를 합쳐야 넘는 경우다. 파일만 세던 때는
+  //    이 상태에서 게이지가 '아직 45%' 라고 말했다.
   resetStore()
-  store.rows.items.push({ id: 'i1', files: [{ path: 'a/1_큰.zip', name: '큰.zip', size: Math.round(GB * 0.85) }] })
+  store.rows.items.push({ id: 'i1', files: [{ path: 'a/1_큰.zip', name: '큰.zip', size: Math.round(GB * 0.45) }] })
+  imagesBucket().set('u1/1-큰.png', { size: Math.round(GB * 0.4) })
   m = mount(settings(() => {}))
   await act(async () => {})
-  check('게이지: 80% 넘으면 주황', q(m.host, '.gauge-fill')?.classList.contains('gauge-warn'))
+  check('게이지: 합쳐서 80% 넘으면 주황', q(m.host, '.gauge-fill')?.classList.contains('gauge-warn'))
   check('게이지: 넘었다고 적는다', m.host.textContent.includes('80% 를 넘었어요'))
   act(() => { m.root.unmount() })
 
-  // ③ files 열이 없는 DB 면 게이지를 숨긴다 (0MB 로 보이면 '아직 안 썼다' 로 읽힌다)
+  // ②-2 이미지만 있어도 센다 (파일 첨부가 하나도 없는 사용자)
   resetStore()
-  store.missingFilesColumn = true
+  imagesBucket().set('u1/1-a.png', { size: 7 * MB })
   m = mount(settings(() => {}))
   await act(async () => {})
-  check('게이지: files 열이 없으면 숨는다', q(m.host, '.gauge') === null)
+  check('게이지: 파일이 없어도 이미지는 센다',
+    q(m.host, '.set-value')?.textContent.includes('저장소 7.0MB / 1GB'),
+    q(m.host, '.set-value')?.textContent)
+  act(() => { m.root.unmount() })
+
+  // ②-3 이미지 목록을 못 읽으면 0 이라고 하지 않는다 — '못 읽었다' 와 '0바이트' 는 다르다
+  resetStore()
+  store.rows.items.push({ id: 'i1', files: [{ path: 'a/1_가.pdf', name: '가.pdf', size: 2 * MB }] })
+  store.listError = 'bucket list denied'
+  m = mount(settings(() => {}))
+  await act(async () => {})
+  check('게이지: 이미지를 못 읽으면 그렇게 적는다',
+    q(m.host, '.set-value')?.textContent.includes('이미지 확인 못 함'),
+    q(m.host, '.set-value')?.textContent)
+  check('게이지: 아는 쪽(파일)은 그대로 보여 준다',
+    q(m.host, '.set-value')?.textContent.includes('파일 2.0MB'),
+    q(m.host, '.set-value')?.textContent)
+  act(() => { m.root.unmount() })
+  store.listError = null
+
+  // ③ 양쪽 다 못 읽으면 게이지를 숨긴다 (0MB 로 보이면 '아직 안 썼다' 로 읽힌다)
+  //    files 열이 없는 DB(setup.sql 미실행) + 이미지도 못 읽는 상태.
+  resetStore()
+  store.missingFilesColumn = true
+  store.listError = 'bucket list denied'
+  m = mount(settings(() => {}))
+  await act(async () => {})
+  check('게이지: 양쪽 다 못 읽으면 숨는다', q(m.host, '.gauge') === null)
   check('게이지: 그래도 나머지 설정은 그대로 뜬다', m.host.textContent.includes('화면 테마'))
   act(() => { m.root.unmount() })
+  store.listError = null
+
+  // ③-2 files 열만 없고 이미지는 읽히면 — 숨기지 않는다.
+  //     🔴 아는 절반을 감추면 사용자는 자기가 얼마나 썼는지 알 길이 없다.
   resetStore()
+  store.missingFilesColumn = true
+  imagesBucket().set('u1/1-a.png', { size: 4 * MB })
+  m = mount(settings(() => {}))
+  await act(async () => {})
+  check('게이지: 이미지만 읽혀도 보여 준다', q(m.host, '.gauge') !== null)
+  check('게이지: 파일 쪽은 확인 못 함으로 적는다',
+    q(m.host, '.set-value')?.textContent.includes('파일 확인 못 함'),
+    q(m.host, '.set-value')?.textContent)
+  act(() => { m.root.unmount() })
+  resetStore()
+
+  // ④ 한도 문구는 상수에서 나온다 — 화면에 손으로 적은 '1GB' 가 없어야 한다
+  check('한도 문구가 상수에서 나온다', STORAGE_QUOTA_LABEL === '1GB', STORAGE_QUOTA_LABEL)
+  check('한도 상수가 1GB 다', STORAGE_QUOTA_BYTES === GB, STORAGE_QUOTA_BYTES)
 }
 
 // ── 15. 공개 URL ↔ 스토리지 경로 ────────────────────────────

@@ -4,8 +4,8 @@ import { useEffect, useState } from 'react'
 import { THEME_ICON, THEME_LABEL, THEME_ORDER } from '../theme.js'
 import { useEscapeKey } from '../hooks.js'
 import {
-  supabase, fetchAllRows, totalFileBytes, formatBytes,
-  STORAGE_QUOTA_BYTES, STORAGE_WARN_RATIO
+  supabase, fetchAllRows, totalFileBytes, totalImageBytes, formatBytes,
+  STORAGE_QUOTA_BYTES, STORAGE_QUOTA_LABEL, STORAGE_WARN_RATIO
 } from '../supabase.js'
 import {
   PIN_LENGTH, IDLE_CHOICES, cryptoReady, isValidPin,
@@ -21,10 +21,15 @@ export default function Settings({
 }) {
   useEscapeKey(onClose)
 
-  // 첨부 파일이 차지한 용량. items.files 의 size 를 더한다 —
-  // 스토리지를 직접 훑으면(list) 폴더마다 요청이 붙고, 지워진 항목의 고아까지 세게 된다.
-  // 우리가 세고 싶은 것은 '지금 항목에 붙어 있는 파일' 이다.
+  // 저장소 사용량은 **두 갈래를 더해서** 본다. Supabase 의 1GB 는 프로젝트 전체
+  // 스토리지 합계에 걸리는 값이라, 파일만 세면 게이지가 실제보다 적게 나온다.
+  //  · 파일: items.files 의 size 합 (표에 크기가 적혀 있어 요청이 안 든다)
+  //  · 이미지: archive-images 버킷을 직접 물어본다 (DB 에 크기가 없다. 키가 사용자당
+  //    폴더 하나라 요청 한 번이면 끝난다 — supabase.js 의 totalImageBytes 참고)
+  // 🔴 둘을 따로 담는다. 한쪽만 실패해도 아는 쪽은 보여 줘야 한다 — '못 읽었다' 와
+  //    '0바이트다' 는 다른 말이고, 게이지가 그 둘을 같게 그리면 안 된다.
   const [used, setUsed] = useState(null)
+  const [imageUsed, setImageUsed] = useState(null)
 
   useEffect(() => {
     if (!supabase) return
@@ -38,10 +43,21 @@ export default function Settings({
         console.warn('[설정] 저장소 사용량을 읽지 못했습니다:', err)
       }
     })()
+    ;(async () => {
+      try {
+        const bytes = await totalImageBytes(userId)
+        if (alive) setImageUsed(bytes)
+      } catch (err) {
+        // 버킷 목록을 못 읽는 경우(정책·연결). 파일 쪽 숫자는 그대로 살린다.
+        console.warn('[설정] 이미지 사용량을 읽지 못했습니다:', err)
+      }
+    })()
     return () => { alive = false }
-  }, [])
+  }, [userId])
 
-  const ratio = used === null ? 0 : Math.min(1, used / STORAGE_QUOTA_BYTES)
+  const known = used !== null || imageUsed !== null
+  const total = (used ?? 0) + (imageUsed ?? 0)
+  const ratio = !known ? 0 : Math.min(1, total / STORAGE_QUOTA_BYTES)
   const warn = ratio > STORAGE_WARN_RATIO
 
   return (
@@ -71,7 +87,7 @@ export default function Settings({
           </p>
         </section>
 
-        {used !== null && (
+        {known && (
           <section className="set-section">
             <h3 className="set-head">저장소</h3>
             <div
@@ -80,20 +96,28 @@ export default function Settings({
               aria-valuenow={Math.round(ratio * 100)}
               aria-valuemin={0}
               aria-valuemax={100}
-              aria-label="첨부 파일 저장소 사용량"
+              aria-label="저장소 사용량 (첨부 파일 + 이미지)"
             >
               {/* 0 이어도 눈에 보이게 최소 폭을 준다 — 빈 막대는 '아직 못 읽었다' 로도 읽힌다 */}
               <span
                 className={`gauge-fill ${warn ? 'gauge-warn' : ''}`}
-                style={{ width: `${Math.max(ratio * 100, used > 0 ? 2 : 0)}%` }}
+                style={{ width: `${Math.max(ratio * 100, total > 0 ? 2 : 0)}%` }}
               />
             </div>
             <p className="set-value">
-              파일 {formatBytes(used)} / 1GB
+              {/* 🔴 합계를 앞에 두고 내역을 괄호로 붙인다. 한도와 견주는 값은 합계 하나뿐이고,
+                  내역은 '무엇을 줄이면 되나' 를 알려 주는 자리다. 한쪽을 못 읽었으면
+                  0 으로 적지 않고 그렇게 말한다 — 0 은 사실 주장이다. */}
+              저장소 {formatBytes(total)} / {STORAGE_QUOTA_LABEL}
+              {' ('}
+              파일 {used === null ? '확인 못 함' : formatBytes(used)}
+              {' · '}
+              이미지 {imageUsed === null ? '확인 못 함' : formatBytes(imageUsed)}
+              {')'}
               {warn && <span className="gauge-note"> · 80% 를 넘었어요</span>}
             </p>
             <p className="set-hint">
-              항목에 붙어 있는 첨부 파일의 합계입니다. 이미지는 세지 않습니다.
+              Supabase 무료 플랜 기준입니다. 80%를 넘으면 정리하거나 확장을 검토하세요.
             </p>
           </section>
         )}
