@@ -6,11 +6,11 @@
 // 링크가 둘 이상이면 '한 항목에 모두 담기'(기본)와 '링크마다 개별 항목'을 고르게 하고,
 // 개별 모드가 예전 그 화면이 하던 일(링크마다 noembed 로 제목을 받아 한 건씩 저장)을 그대로 한다.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { moveItem, useDragOrder } from '../reorder.js'
+import { moveItem, useDragOrder, useCoarsePointer } from '../reorder.js'
 import {
   supabase, extractUrls, parseLinks, parseTags, youtubeThumb, ymd, fetchLinkTitle,
   parseImages, joinImages, uploadImage, imageFilesFromPaste, MAX_IMAGES,
-  parseFiles, joinFiles, uploadFile, signedFileUrl, fileRejectReason, fileIcon, formatBytes,
+  parseFiles, joinFiles, uploadFile, signedFileUrl, downloadAsBlob, fileRejectReason, fileIcon, formatBytes,
   removeStorageFiles, removeStorageImages, splitByKind, MAX_FILES,
   treeOrder, categoryPath,
   stripInvisibleAll, saveErrorMessage, byteLength, DRAFT_DEBOUNCE_MS, DRAFT_MAX_BYTES
@@ -173,8 +173,35 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   )
   const splitting = !isEdit && splitMode && allLinks.length > 1
 
-  const imgOrder = useDragOrder({ count: images.length, onMove: moveImage })
-  const fileOrder = useDragOrder({ count: files.length, onMove: moveFile })
+  /* 순서 바꾸기 — 입력 장치에 따라 방식을 **바꾼다**.
+     🔴 마우스: 끌기가 제일 빠르다. 그대로 둔다.
+     🔴 터치: 끌기를 버린다. 꾹 누르기 300ms → 조금만 밀리면 스크롤로 넘어감 →
+        84px 줄 안에서 손가락이 목록 밖으로 나감. 실사용에서 조작 불가 판정이 났다.
+        대신 **탭으로 고르고 버튼으로 옮긴다** (아래 pick / img-pickbar).
+     파일 줄은 터치에서도 ▲▼ 버튼이 이미 있어서 잃는 것이 없다. */
+  const coarse = useCoarsePointer()
+  const imgOrder = useDragOrder({ count: images.length, onMove: moveImage, enabled: !coarse })
+  const fileOrder = useDragOrder({ count: files.length, onMove: moveFile, enabled: !coarse })
+
+  // 터치에서 고른 썸네일의 번호(-1 이면 아무것도 안 고름).
+  // 🔴 번호로 기억한다 — 옮기면 번호가 따라 바뀌므로 옮긴 뒤에 직접 갱신한다.
+  const [pick, setPick] = useState(-1)
+  // 고른 것이 사라지면(빼기·저장 실패 되돌림) 선택도 놓는다.
+  useEffect(() => {
+    if (pick >= images.length) setPick(-1)
+  }, [images.length, pick])
+  // 마우스로 돌아오면(태블릿에 마우스를 붙였다) 선택 막대를 치운다 — 그때는 끌기가 산다
+  useEffect(() => {
+    if (!coarse) setPick(-1)
+  }, [coarse])
+
+  function movePick(to) {
+    if (pick < 0) return
+    const target = Math.max(0, Math.min(images.length - 1, to))
+    if (target === pick) return
+    moveImage(pick, target)
+    setPick(target)                      // 선택은 '자리' 가 아니라 '그 이미지' 를 따라간다
+  }
 
   // 제목·링크·내용·이미지·파일 중 하나라도 있으면 저장할 수 있다. 제목은 이제 필수가 아니다.
   const hasAnything =
@@ -461,13 +488,11 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   async function downloadFile(f) {
     try {
       const url = await signedFileUrl(f.path, f.name)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = f.name
-      a.rel = 'noopener'
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
+      /* 🔴 공유 링크와 **같은 함수**로 받는다. 예전에는 여기서 <a download> 로 바로 눌렀는데,
+         서명 주소는 다른 출처라 그 속성이 무시되고 서버 헤더가 이름을 정했다 — 그 헤더가
+         한글 이름에서 깨진다. 두 길이 서로 다른 방식을 쓰면 한쪽만 고치고 끝나므로
+         (실제로 공유 쪽에서만 문제가 보고됐다) 아예 한 함수로 모았다. */
+      await downloadAsBlob(url, f.name)
     } catch (err) {
       console.error('파일 내려받기 실패:', err)
       const message = `파일을 내려받지 못했어요 — ${saveErrorMessage(err)}`
@@ -1003,21 +1028,83 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
             onDragLeave={() => setDragOver(false)}
             onDrop={handleDrop}
           >
+            {/* 고른 썸네일을 옮기는 줄. 터치에서만, 고른 것이 있을 때만 나온다.
+                🔴 [◀ 맨 앞] 을 맨 왼쪽에 크게 둔다. 순서를 바꾸는 이유는 열에 아홉이
+                   '표지를 이걸로' 이고, 그건 한 칸씩 미는 일이 아니라 **한 번에 맨 앞**이다.
+                🔴 [크게 보기] 가 여기 있는 이유: 터치에서는 썸네일 탭이 '고르기' 가 되어
+                   크게 보기를 잃는다. 잃은 길을 이 줄에서 돌려준다. */}
+            {coarse && pick >= 0 && images.length > 1 && (
+              <div className="img-pickbar" role="group" aria-label="고른 이미지 옮기기">
+                <span className="img-pickbar-at" aria-live="polite">
+                  {pick + 1}번째{pick === 0 ? ' · 대표' : ''}
+                </span>
+                <button
+                  type="button"
+                  className="btn-ghost btn-sm img-pickbar-first"
+                  onClick={() => movePick(0)}
+                  disabled={pick === 0}
+                >◀ 맨 앞</button>
+                <button
+                  type="button"
+                  className="btn-ghost btn-sm"
+                  onClick={() => movePick(pick - 1)}
+                  disabled={pick === 0}
+                  aria-label="한 칸 앞으로"
+                >◀</button>
+                <button
+                  type="button"
+                  className="btn-ghost btn-sm"
+                  onClick={() => movePick(pick + 1)}
+                  disabled={pick >= images.length - 1}
+                  aria-label="한 칸 뒤로"
+                >▶</button>
+                <button
+                  type="button"
+                  className="btn-ghost btn-sm"
+                  onClick={() => setZoom(images[pick])}
+                >크게 보기</button>
+                <button
+                  type="button"
+                  className="btn-ghost btn-sm img-pickbar-off"
+                  onClick={() => setPick(-1)}
+                >선택 해제</button>
+              </div>
+            )}
+
             {images.length > 0 && (
-              <div className={`img-strip ${imgOrder.dragging ? 'reorder-on' : ''}`}>
+              <div
+                className={`img-strip ${imgOrder.dragging ? 'reorder-on' : ''}`}
+                {...(images.length > 1 && !coarse ? imgOrder.containerProps('x') : {})}
+              >
                 {images.map((url, i) => (
                   <div
                     className={`img-thumb${imgOrder.dragIndex === i ? ' reorder-drag' : ''}${
                       imgOrder.dragIndex >= 0 && imgOrder.overIndex === i && imgOrder.dragIndex !== i
-                        ? ' reorder-over' : ''}`}
+                        ? ' reorder-over' : ''}${coarse && pick === i ? ' img-picked' : ''}`}
                     key={url}
-                    {...(images.length > 1 ? imgOrder.itemProps(i) : {})}
+                    {...(images.length > 1 && !coarse ? imgOrder.itemProps(i) : {})}
                   >
                     <button
                       type="button"
                       className="img-thumb-open"
-                      onClick={() => setZoom(url)}
-                      aria-label={`${i + 1}번째 이미지 크게 보기`}
+                      /* 터치: 탭 = 고르기(한 번 더 탭하면 놓기). 마우스: 탭 = 크게 보기.
+                         🔴 터치에서 탭을 크게 보기로 두면 고를 방법이 없고, 고르기를
+                            길게 누르기로 두면 방금 버린 그 조작으로 되돌아간다. */
+                      onClick={() => {
+                        if (coarse && images.length > 1) setPick(pick === i ? -1 : i)
+                        else setZoom(url)
+                      }}
+                      /* 키보드로도 순서를 바꾼다. 손잡이(⠿)를 없애면서 이 자리로 옮겼다 —
+                         손잡이는 썸네일의 4분의 1을 덮어 정작 이미지가 안 보였다. */
+                      onKeyDown={(e) => {
+                        if (images.length < 2) return
+                        if (e.key === 'ArrowLeft' && i > 0) { e.preventDefault(); moveImage(i, i - 1) }
+                        if (e.key === 'ArrowRight' && i < images.length - 1) { e.preventDefault(); moveImage(i, i + 1) }
+                      }}
+                      aria-label={coarse && images.length > 1
+                        ? `${i + 1}번째 이미지 ${pick === i ? '선택 해제' : '고르기'}`
+                        : `${i + 1}번째 이미지 크게 보기 — 방향키로 순서를 바꿉니다`}
+                      aria-pressed={coarse && images.length > 1 ? pick === i : undefined}
                     >
                       <img src={url} alt="" loading="lazy" decoding="async" draggable={false} />
                     </button>
@@ -1027,19 +1114,6 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
                       onClick={() => removeImage(url)}
                       aria-label={`${i + 1}번째 이미지 제거`}
                     >✕</button>
-                    {/* 끌기만 두면 키보드로는 순서를 못 바꾼다. 손잡이에 ←→ 를 달아 둔다. */}
-                    {images.length > 1 && (
-                      <button
-                        type="button"
-                        className="reorder-grip img-grip"
-                        aria-label={`${i + 1}번째 이미지 순서 바꾸기 — 방향키로 옮깁니다`}
-                        title="끌어서 옮기기 (방향키도 됩니다)"
-                        onKeyDown={(e) => {
-                          if (e.key === 'ArrowLeft' && i > 0) { e.preventDefault(); moveImage(i, i - 1) }
-                          if (e.key === 'ArrowRight' && i < images.length - 1) { e.preventDefault(); moveImage(i, i + 1) }
-                        }}
-                      >⠿</button>
-                    )}
                     {i === 0 && <span className="img-thumb-tag">대표</span>}
                   </div>
                 ))}
@@ -1072,7 +1146,11 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
               <p className="img-hint">
                 붙여넣기(Ctrl+V)·끌어놓기로도 올릴 수 있어요 · 최대 {MAX_IMAGES}장 ·
                 긴 변 1600px 넘으면 줄여서 올려요
-                {images.length > 1 && ' · 썸네일을 끌면 순서가 바뀌고 맨 앞이 카드 표지예요 (폰은 꾹 누른 뒤 끌기)'}
+                {/* 🔴 안내도 입력 장치에 맞춘다. 폰에서 '끌어 보세요' 라고 적어 두면
+                    지금은 되지도 않는 조작을 시키는 것이 된다. */}
+                {images.length > 1 && (coarse
+                  ? ' · 썸네일을 눌러 고른 뒤 [◀ 맨 앞] 을 누르면 카드 표지가 됩니다'
+                  : ' · 썸네일을 끌면 순서가 바뀌고 맨 앞이 카드 표지예요')}
               </p>
             </div>
           </div>
@@ -1088,14 +1166,17 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
             onDrop={handleDrop}
           >
             {files.length > 0 && (
-              <ul className={`file-list ${fileOrder.dragging ? 'reorder-on' : ''}`}>
+              <ul
+                className={`file-list ${fileOrder.dragging ? 'reorder-on' : ''}`}
+                {...(files.length > 1 && !coarse ? fileOrder.containerProps('y') : {})}
+              >
                 {files.map((f, i) => (
                   <li
                     className={`file-row${fileOrder.dragIndex === i ? ' reorder-drag' : ''}${
                       fileOrder.dragIndex >= 0 && fileOrder.overIndex === i && fileOrder.dragIndex !== i
                         ? ' reorder-over' : ''}`}
                     key={f.path}
-                    {...(files.length > 1 ? fileOrder.itemProps(i) : {})}
+                    {...(files.length > 1 && !coarse ? fileOrder.itemProps(i) : {})}
                   >
                     {/* 세로 목록은 버튼이 더 정확하다 — 한 칸씩 옮기는 일이 대부분이고,
                         좁은 화면에서 끌기는 손가락이 목록 밖으로 나가기 쉽다. */}

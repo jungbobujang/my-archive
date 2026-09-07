@@ -242,11 +242,45 @@ check('375px(파일): 용량이 붙어 있다', f.fileSizes.join(' ') === '2.3MB
 
   const before = await order()
   check('375px(순서): 이미지 3장', before.length === 3, before.length)
-  check('375px(순서): 손잡이가 폰에서 보인다', await page.evaluate(
-    () => getComputedStyle(document.querySelector('.img-grip')).opacity === '1'
-  ))
-  const gripHit = await page.evaluate(() => {
-    const el = document.querySelector('.img-grip')
+
+  /* 썸네일 위가 다시 사진으로 보이는가.
+     🔴 예전에는 손잡이(⠿ 26px)와 ✕(28px)가 76px 칸의 윗변을 거의 다 덮었다.
+        고를 대상이 사진인데 화면에는 단추만 보였다. 손잡이를 없애고 ✕ 를 줄였으므로,
+        '덮인 넓이' 를 숫자로 재서 다시 커지면 여기서 걸리게 한다. */
+  check('375px(순서): 손잡이(⠿)가 없다',
+    (await page.$$('.img-grip')).length === 0)
+  const cover = await page.evaluate(() => {
+    const t = document.querySelector('.img-thumb')
+    const r = t.getBoundingClientRect()
+    let used = 0
+    for (const b of t.querySelectorAll('button:not(.img-thumb-open), .reorder-grip')) {
+      const br = b.getBoundingClientRect()
+      used += br.width * br.height
+    }
+    return Math.round((used / (r.width * r.height)) * 100)
+  })
+  check('375px(순서): 단추가 썸네일의 15% 를 넘지 않는다', cover <= 15, cover + '%')
+
+  /* ① 맨 끝 사진을 표지로 — **탭 두 번**에 끝나야 한다.
+     🔴 이 시나리오가 이 화면의 존재 이유다. 순서를 바꾸는 이유는 열에 아홉이
+        '표지를 이걸로' 이고, 예전 방식(꾹 누르고 끌기)은 폰에서 그걸 못 해냈다. */
+  const tap = async (sel, i = 0) => {
+    const at = await centerOf(sel, i)
+    await touch('touchStart', at.x, at.y)
+    await sleep(60)                     // 롱프레스 300ms 보다 훨씬 짧게 — 그냥 탭이다
+    await touch('touchEnd', at.x, at.y)
+    await sleep(140)
+  }
+
+  await tap('.img-thumb', 2)                          // 탭 1: 맨 끝 사진 고르기
+  check('375px(순서): 탭하면 고른 표시가 붙는다',
+    (await page.$$('.img-thumb.img-picked')).length === 1)
+  check('375px(순서): 고른 것이 3번째',
+    await page.evaluate(() => [...document.querySelectorAll('.img-thumb')][2].classList.contains('img-picked')))
+  check('375px(순서): 옮기기 줄이 뜬다', (await page.$('.img-pickbar')) !== null)
+  check('375px(순서): 탭이 확대창을 열지 않는다', (await page.$('.zoom-backdrop')) === null)
+  const barHit = await page.evaluate(() => {
+    const el = document.querySelector('.img-pickbar-first')
     const r = el.getBoundingClientRect()
     const cs = getComputedStyle(el, '::after')
     const num = (v) => (v === 'auto' ? 0 : parseFloat(v) || 0)
@@ -254,34 +288,37 @@ check('375px(파일): 용량이 붙어 있다', f.fileSizes.join(' ') === '2.3MB
     return { w: Math.round(r.width - (has ? num(cs.left) + num(cs.right) : 0)),
       h: Math.round(r.height - (has ? num(cs.top) + num(cs.bottom) : 0)) }
   })
-  check('375px(순서): 손잡이 손가락 영역 38px 급', gripHit.h >= 38 && gripHit.w >= 38, JSON.stringify(gripHit))
+  check('375px(순서): [맨 앞] 손가락 영역 44px 급', barHit.h >= 44, JSON.stringify(barHit))
 
-  // ① 꾹 누르고(400ms) 3번째 자리로 끌기
+  await tap('.img-pickbar-first')                     // 탭 2: 맨 앞으로
+  const after = await order()
+  check('375px(순서): 탭 2번에 맨 끝 사진이 대표가 된다',
+    after[0] === before[2] && after.length === 3, before.join() + ' → ' + after.join())
+  check('375px(순서): 대표 뱃지가 첫 칸에 있다', await page.evaluate(
+    () => document.querySelector('.img-thumb .img-thumb-tag')?.textContent === '대표'
+  ))
+  check('375px(순서): 선택이 옮긴 사진을 따라간다', await page.evaluate(
+    () => [...document.querySelectorAll('.img-thumb')][0].classList.contains('img-picked')
+  ))
+
+  // ② 꾹 눌러 끌어도 순서가 바뀌지 않는다 — 터치에서는 끌기를 버렸다
+  const kept = await order()
   const a = await centerOf('.img-thumb', 0)
   const c = await centerOf('.img-thumb', 2)
   await touch('touchStart', a.x, a.y)
-  await sleep(400)                                  // 롱프레스 300ms 를 넘긴다
+  await sleep(400)
   await touch('touchMove', a.x + 10, a.y)
   await touch('touchMove', c.x, c.y)
   await sleep(60)
   await touch('touchEnd', c.x, c.y)
   await sleep(150)
-  const after = await order()
-  check('375px(순서): 꾹 눌러 끌면 순서가 바뀐다',
-    after.join() !== before.join() && after[after.length - 1] === before[0],
-    `${before.join()} → ${after.join()}`)
+  check('375px(순서): 폰에서는 끌어도 순서가 안 바뀐다 (탭 방식만)',
+    (await order()).join() === kept.join(), (await order()).join())
 
-  /* ② 스크롤을 방해하지 않는가.
-     🔴 여기서 재는 방법을 한 번 바꿨다. 처음에는 실제로 굴려 보려고
-        Input.synthesizeScrollGesture(touch) 를 썼는데, 이 환경에서는 **끌기를 한 적이
-        없는 새 페이지에서도** 안쪽 스크롤 상자를 굴리지 못했다(마우스 제스처는 굴린다).
-        즉 그 실패는 우리 코드가 아니라 합성 터치의 한계였고, 그걸 그대로 두면
-        '멀쩡한데 빨간 줄' 이 남아 다음 사람이 진짜 고장과 구분하지 못한다.
-     그래서 스크롤 그 자체 대신 **스크롤을 막는 두 가지 수단**을 직접 잰다:
-        ㄱ. 평소에 touch-action 을 none 으로 묶어 두지 않았는가 (CSS 쪽)
-        ㄴ. 끌기가 끝난 뒤 touchmove 차단이 풀렸는가 (JS 쪽)
-     이 둘이 지켜지면 손가락은 평소처럼 화면을 넘길 수 있다. */
-  const kept = await order()
+  /* ③ 스크롤을 방해하지 않는가.
+     🔴 끌기를 버린 지금은 더 단순해졌다 — touchmove 를 막는 코드 자체가 안 걸린다.
+        그래도 계속 잰다. 이 값이 다시 none 이 되거나 touchmove 가 막히는 날,
+        사람은 '순서 바꾸기가 이상하다' 가 아니라 '화면이 안 넘어간다' 로 만난다. */
   const ta = await page.evaluate(() => ({
     strip: getComputedStyle(document.querySelector('.img-strip')).touchAction,
     thumb: getComputedStyle(document.querySelector('.img-thumb')).touchAction,
@@ -289,34 +326,17 @@ check('375px(파일): 용량이 붙어 있다', f.fileSizes.join(' ') === '2.3MB
   }))
   check('375px(순서): 평소 touch-action 을 묶어 두지 않는다',
     ta.strip !== 'none' && ta.thumb !== 'none' && ta.row !== 'none', JSON.stringify(ta))
-
-  // 끌기가 끝난 지금, document 의 touchmove 는 아무도 막지 않아야 한다
   const blockedAfter = await page.evaluate(() => {
     const ev = new TouchEvent('touchmove', { bubbles: true, cancelable: true })
     document.dispatchEvent(ev)
     return ev.defaultPrevented
   })
-  check('375px(순서): 끌기가 끝나면 스크롤 차단이 풀린다', blockedAfter === false, blockedAfter)
+  check('375px(순서): 손가락으로 화면을 넘길 수 있다', blockedAfter === false, blockedAfter)
 
-  // 끌기 중에는 막아야 한다 (그래야 끌면서 화면이 같이 밀리지 않는다)
-  const a2 = await centerOf('.img-thumb', 0)
-  await touch('touchStart', a2.x, a2.y)
-  await sleep(400)
-  const blockedDuring = await page.evaluate(() => {
-    const ev = new TouchEvent('touchmove', { bubbles: true, cancelable: true })
-    document.dispatchEvent(ev)
-    return ev.defaultPrevented
-  })
-  await touch('touchEnd', a2.x, a2.y)
-  await sleep(120)
-  check('375px(순서): 끌기 중에는 화면이 같이 밀리지 않는다', blockedDuring === true, blockedDuring)
-  const blockedAgain = await page.evaluate(() => {
-    const ev = new TouchEvent('touchmove', { bubbles: true, cancelable: true })
-    document.dispatchEvent(ev)
-    return ev.defaultPrevented
-  })
-  check('375px(순서): 손을 떼면 다시 풀린다', blockedAgain === false, blockedAgain)
-  check('375px(순서): 끌지 않고 떼면 순서는 그대로', (await order()).join() === kept.join())
+  // ④ 선택 해제
+  await tap('.img-pickbar-off')
+  check('375px(순서): 선택을 놓으면 줄이 사라진다', (await page.$('.img-pickbar')) === null)
+  check('375px(순서): 놓아도 순서는 그대로', (await order()).join() === kept.join())
 
   // 파일 줄의 ▲▼ 손가락 영역
   await page.evaluate(() => document.querySelector('.file-list')?.scrollIntoView({ block: 'center' }))
@@ -351,6 +371,66 @@ check('375px(파일): 용량이 붙어 있다', f.fileSizes.join(' ') === '2.3MB
     (await page.evaluate(() => document.documentElement.scrollWidth)) <= 375)
 
   await page.screenshot({ path: path.join(outDir, 'modal-375-reorder.png'), fullPage: true })
+  await page.close()
+}
+
+/* ── 순서 바꾸기: 1280px 마우스 끌기 ─────────────────────────────────
+   마우스에서는 끌기가 제일 빠르므로 그대로 뒀다. 대신 **첫 자리에 놓기**를 잰다.
+   🔴 사람은 맨 앞으로 보낼 때 커서를 1번 썸네일 **왼쪽 여백**으로 끌고 간다. 예전에는
+      그 자리가 항목이 아니라 통이라 판정이 서지 않아, 왼쪽 끝까지 끌어도 순서가 안 바뀌었다
+      ('가장자리 절반 폭' 으로 보고된 자리). 지금은 통 안이면 가장 가까운 칸으로 떨어진다. */
+{
+  const page = await browser.newPage()
+  await page.setViewport({ width: 1280, height: 900 })
+  await page.goto(`${base}?mode=reorder`, { waitUntil: 'networkidle0' })
+  await page.waitForSelector('.img-thumb', { timeout: 15000 })
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  const order = () => page.evaluate(
+    () => [...document.querySelectorAll('.img-thumb-open img')].map((i) => i.getAttribute('src').slice(-24))
+  )
+  const boxOf = (sel, i = 0) => page.evaluate((s2, n) => {
+    const el = document.querySelectorAll(s2)[n]
+    const r = el.getBoundingClientRect()
+    return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height),
+      cx: Math.round(r.left + r.width / 2), cy: Math.round(r.top + r.height / 2) }
+  }, sel, i)
+
+  await page.evaluate(() => document.querySelector('.img-strip')?.scrollIntoView({ block: 'center' }))
+  await sleep(120)
+  const before = await order()
+  check('1280px(순서): 마우스에서는 끌기가 살아 있다',
+    (await page.$$('.img-thumb[data-reorder-index]')).length === 3)
+
+  // 맨 끝 썸네일을 잡아 **첫 썸네일보다 왼쪽**(줄의 여백)으로 끌어다 놓는다
+  const last = await boxOf('.img-thumb', 2)
+  const strip = await boxOf('.img-strip')
+  await page.mouse.move(last.cx, last.cy)
+  await page.mouse.down()
+  await page.mouse.move(last.cx - 20, last.cy, { steps: 4 })
+  await page.mouse.move(strip.x + 2, last.cy, { steps: 8 })   // 첫 칸의 왼쪽 여백
+  await sleep(60)
+  await page.mouse.up()
+  await sleep(150)
+  const after = await order()
+  check('1280px(순서): 왼쪽 여백에 놓아도 맨 앞으로 간다',
+    after[0] === before[2], `${before.join()} → ${after.join()}`)
+
+  // 오른쪽 끝 여백도 같다 — 맨 뒤로 보내기
+  const first = await boxOf('.img-thumb', 0)
+  const strip2 = await boxOf('.img-strip')
+  await page.mouse.move(first.cx, first.cy)
+  await page.mouse.down()
+  await page.mouse.move(first.cx + 20, first.cy, { steps: 4 })
+  await page.mouse.move(strip2.x + strip2.w - 2, first.cy, { steps: 8 })
+  await sleep(60)
+  await page.mouse.up()
+  await sleep(150)
+  const after2 = await order()
+  check('1280px(순서): 오른쪽 여백에 놓으면 맨 뒤로 간다',
+    after2[after2.length - 1] === after[0], `${after.join()} → ${after2.join()}`)
+
+  check('1280px(순서): 폰 전용 옮기기 줄은 안 뜬다', (await page.$('.img-pickbar')) === null)
+  await page.screenshot({ path: path.join(outDir, 'modal-1280-reorder.png'), fullPage: true })
   await page.close()
 }
 

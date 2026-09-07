@@ -333,9 +333,50 @@ export async function uploadFile(file, itemId) {
   return { path, name: file.name, size: file.size }
 }
 
-// 비공개 버킷이라 받을 때마다 짧은 주소를 만든다. download 를 주면 원본 이름으로 저장된다.
-// 키에 이름이 없어진 뒤로는 **이 download 인자가 원본 이름을 되살리는 유일한 자리**다.
-// (<a download> 속성은 다른 출처의 주소에서는 무시된다 — 서명 주소가 바로 그 경우다.)
+/* 원본 이름으로 내려받기 — **모든 다운로드가 이 한 곳을 지난다** (본 계정·공유 링크 둘 다).
+ *
+ * 🔴 서명 주소의 Content-Disposition 에 기대지 않는다. 실제 응답을 떠 보면 Supabase 는
+ *    이렇게 보낸다:
+ *      attachment; filename=%EC%96%91%EC%8B%9D%20(%EC%B5%9C%EC%A2%85).hwp;
+ *                  filename*=UTF-8''%EC%96%91%EC%8B%9D%20(%EC%B5%9C%EC%A2%85).hwp
+ *    이름에 괄호·공백이 있으면 filename* 값이 RFC 5987 의 attr-char 범위를 벗어난다.
+ *    그러면 브라우저가 그 줄을 버리고 앞의 filename= 을 **글자 그대로** 쓰고,
+ *    사람은 '%EC%96%91%EC%8B%9D....hwp' 라는 이름의 파일을 받는다. 실제로 그렇게 됐다.
+ * 🔴 그래서 헤더 의존을 끊는다. 받아서 blob 으로 만들면 주소가 blob: 이 되어 **같은 출처**가
+ *    되고, 그때는 <a download> 속성이 이름을 확정한다 — 브라우저 사이 차이가 사라진다.
+ * 🔴 받다가 실패하면 원래 주소로 그냥 연다. 이름이 깨질지언정 파일은 손에 넣어야 한다 —
+ *    이름 때문에 다운로드 자체를 못 하게 만드는 것은 더 나쁜 맞바꿈이다.
+ *
+ * @returns {Promise<'blob'|'fallback'>} 어느 길로 받았는지 (점검이 이 값을 본다)
+ */
+export async function downloadAsBlob(url, name) {
+  const click = (href, revoke) => {
+    const a = document.createElement('a')
+    a.href = href
+    a.download = name || ''
+    a.rel = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    // 바로 지우면 브라우저가 아직 안 읽었을 수 있다. 한 박자 뒤에 놓아준다.
+    if (revoke) setTimeout(() => { try { URL.revokeObjectURL(href) } catch { /* 무시 */ } }, 60_000)
+  }
+  try {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error('status ' + res.status)
+    const blob = await res.blob()
+    click(URL.createObjectURL(blob), true)
+    return 'blob'
+  } catch (err) {
+    console.warn('[내려받기] blob 으로 못 받아 주소를 그대로 엽니다:', err)
+    click(url, false)
+    return 'fallback'
+  }
+}
+
+// 비공개 버킷이라 받을 때마다 짧은 주소를 만든다. download 를 주면 서버가 이름을 붙여 주지만
+// 그 헤더는 한글 이름에서 깨진다(위 downloadAsBlob 참고) — 이름을 확정하는 것은 blob 쪽이다.
+// 이 인자는 그대로 둔다: blob 을 못 받아 주소를 그냥 열 때의 마지막 방어선이다.
 export async function signedFileUrl(path, name) {
   const { data, error } = await supabase.storage
     .from(FILE_BUCKET)

@@ -19,6 +19,35 @@ export const LONG_PRESS_MS = 300   // 터치는 이만큼 누르고 있어야 �
 export const DRAG_THRESHOLD_PX = 4 // 마우스는 이만큼 움직여야 끌기로 본다 (클릭을 안 잡아먹게)
 export const CANCEL_MOVE_PX = 10   // 길게 누르기 전에 이만큼 움직이면 스크롤로 본다
 
+/* 손가락으로 쓰는 기기인가.
+ *
+ * 🔴 끌어놓기는 폰에서 **실사용으로 못 쓴다는 판정이 났다.** 꾹 누르는 300ms 를 기다려야
+ *    하고, 그 사이 조금만 움직이면 스크롤로 넘어가고, 84px 짜리 썸네일 줄 안에서
+ *    손가락이 목록 밖으로 나가기 일쑤다. 그래서 터치 기기에서는 끌기를 **버리고**
+ *    탭으로 고르고 버튼으로 옮긴다. 마우스에서는 끌기가 제일 빠르므로 그대로 둔다.
+ * 🔴 '화면 폭' 이 아니라 '포인터 종류' 로 가른다. 좁은 창으로 줄인 데스크톱에는 마우스가
+ *    있고, 넓은 태블릿에는 없다. 판단 근거는 입력 장치여야 한다.
+ */
+export function useCoarsePointer() {
+  const get = () => {
+    try { return Boolean(window.matchMedia?.('(pointer: coarse)')?.matches) } catch { return false }
+  }
+  const [coarse, setCoarse] = useState(get)
+  useEffect(() => {
+    let mq = null
+    try { mq = window.matchMedia?.('(pointer: coarse)') } catch { mq = null }
+    if (!mq) return undefined
+    const on = () => setCoarse(Boolean(mq.matches))
+    on()
+    // 옛 사파리는 addEventListener 가 없다 (마우스를 붙였다 뗀 태블릿에서 바뀐다)
+    mq.addEventListener ? mq.addEventListener('change', on) : mq.addListener?.(on)
+    return () => {
+      mq.removeEventListener ? mq.removeEventListener('change', on) : mq.removeListener?.(on)
+    }
+  }, [])
+  return coarse
+}
+
 // from 번째를 to 자리로 옮긴 새 배열. 원본은 건드리지 않는다.
 export function moveItem(list, from, to) {
   const arr = [...(list ?? [])]
@@ -67,13 +96,37 @@ export function useDragOrder({ count, onMove, longPressMs = LONG_PRESS_MS, enabl
 
   useEffect(() => cleanup, [cleanup])
 
-  // 지금 손가락/커서 아래에 있는 항목의 번호
+  /* 지금 손가락/커서 아래에 있는 항목의 번호.
+   *
+   * 🔴 항목을 정확히 짚지 못했을 때 그냥 -1 로 두면 **첫 자리에 놓기가 유난히 어렵다.**
+   *    맨 앞으로 보내려면 커서를 1번 썸네일 위에 얹어야 하는데, 사람은 본능적으로 그
+   *    **왼쪽**(줄의 여백)으로 끌고 간다. 거기는 항목이 아니라 통(strip)이라 판정이 -1 이
+   *    되고, 마지막 값이 유지돼서 "왼쪽 끝까지 끌었는데 안 맨 앞으로 감" 이 된다.
+   *    실제로 '가장자리 절반 폭' 문제로 보고된 것이 이 자리다.
+   *    그래서 통 안이면 **가장 가까운 칸**으로 떨어뜨린다 — 여백·항목 사이 틈·양 끝
+   *    바깥쪽까지 전부 판정이 선다.
+   */
   const indexAt = useCallback((x, y) => {
     const el = document.elementFromPoint?.(x, y)
     const host = el?.closest?.('[data-reorder-index]')
-    if (!host) return -1
-    const n = Number(host.getAttribute('data-reorder-index'))
-    return Number.isInteger(n) ? n : -1
+    if (host) {
+      const n = Number(host.getAttribute('data-reorder-index'))
+      if (Number.isInteger(n)) return n
+    }
+    const box = el?.closest?.('[data-reorder-container]')
+    if (!box) return -1
+    const axis = box.getAttribute('data-reorder-axis') === 'y' ? 'y' : 'x'
+    let best = -1
+    let bestGap = Infinity
+    for (const node of box.querySelectorAll('[data-reorder-index]')) {
+      const n = Number(node.getAttribute('data-reorder-index'))
+      if (!Number.isInteger(n)) continue
+      const r = node.getBoundingClientRect()
+      const mid = axis === 'y' ? r.top + r.height / 2 : r.left + r.width / 2
+      const gap = Math.abs((axis === 'y' ? y : x) - mid)
+      if (gap < bestGap) { bestGap = gap; best = n }
+    }
+    return best
   }, [])
 
   const begin = useCallback((index) => {
@@ -99,7 +152,7 @@ export function useDragOrder({ count, onMove, longPressMs = LONG_PRESS_MS, enabl
     const start = { x: e.clientX, y: e.clientY }
     const s = {
       index, start, pointerType: e.pointerType || 'mouse',
-      dragging: false, blocking: false, moved: false, timer: 0,
+      dragging: false, blocking: false, moved: false, timer: 0, over: -1,
       block: (ev) => { if (ev.cancelable) ev.preventDefault() }
     }
     st.current = s
@@ -121,19 +174,24 @@ export function useDragOrder({ count, onMove, longPressMs = LONG_PRESS_MS, enabl
       const over = indexAt(cur.x, cur.y)
       // 🔴 빈 곳(-1)에서는 마지막 값을 지킨다. 손가락이 잠깐 틈을 지날 때마다 표시가
       //    꺼지면 어디에 놓이는지 알 수 없어진다.
-      if (over >= 0 && over < count) setOverIndex(over)
+      if (over >= 0 && over < count) { s.over = over; setOverIndex(over) }
     }
 
+    /* 🔴 놓을 자리를 **ref 에도** 적어 두고, 놓을 때는 그 값을 쓴다.
+       예전에는 setOverIndex 의 갱신 함수 안에서 onMove 를 불렀는데, 그건 상태 갱신
+       함수에 부수효과를 넣은 것이다 — React 는 그 함수를 **두 번 부를 수 있고**
+       (StrictMode·렌더 재시도), 실제로 그렇게 되면 한 번 끈 것이 두 칸 움직인다.
+       브라우저 점검에서 세 장을 [1,2,3] → 끝을 맨 앞으로 끌었더니 [2,3,1] 이 나온 것이
+       이 자리였다. 상태는 상태만, 이동은 여기서 한 번만. */
     s.onUp = () => {
       const cur = st.current
       const dragged = cur?.dragging
       const from = cur?.index ?? -1
+      const to = cur?.over ?? -1
       cleanup()
       setDragIndex(-1)
-      setOverIndex((to) => {
-        if (dragged && from >= 0 && to >= 0 && to !== from) onMove?.(from, to)
-        return -1
-      })
+      setOverIndex(-1)
+      if (dragged && from >= 0 && to >= 0 && to !== from) onMove?.(from, to)
     }
 
     window.addEventListener('pointermove', s.onMove)
@@ -154,5 +212,12 @@ export function useDragOrder({ count, onMove, longPressMs = LONG_PRESS_MS, enabl
     onClickCapture: swallowClick
   }), [onPointerDown, swallowClick])
 
-  return { dragIndex, overIndex, onPointerDown, itemProps, dragging: dragIndex >= 0 }
+  /* 항목을 담은 통에 펼친다. 가장자리·틈에서도 판정이 서게 하는 자리다 (indexAt 참고).
+     axis 는 'x'(가로 썸네일 줄) 또는 'y'(세로 파일 목록). */
+  const containerProps = useCallback((axis = 'x') => ({
+    'data-reorder-container': '',
+    'data-reorder-axis': axis
+  }), [])
+
+  return { dragIndex, overIndex, onPointerDown, itemProps, containerProps, dragging: dragIndex >= 0 }
 }

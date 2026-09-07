@@ -257,6 +257,61 @@ function putFile(path, size = 1024) {
   check('유효: 파일을 받을 수 있다', fileLink?.getAttribute('href') === store.rows.shares[0].files[0].url,
     fileLink?.getAttribute('href'))
   check('유효: 파일 이름이 원본 그대로', m.host.textContent.includes('계획서.hwp'))
+
+  /* 🔴 받는 파일의 **저장 이름**을 잰다. 목록에 이름이 잘 보이는 것과, 받았을 때
+     그 이름으로 저장되는 것은 다른 일이다 — 실제로 목록은 멀쩡한데 받은 파일만
+     '%EC%96%91....hwp' 로 저장되는 버그가 있었다.
+     서명 주소는 다른 출처라 <a download> 가 무시되고 서버의 Content-Disposition 이
+     이름을 정하는데, Supabase 가 보내는 그 헤더는 괄호·공백이 든 한글 이름에서 깨진다
+     (filename* 값이 RFC 5987 범위를 벗어나 브라우저가 앞의 filename= 을 글자 그대로 쓴다).
+     그래서 받아서 blob 으로 만들어 저장한다 — blob: 은 같은 출처라 download 가 이긴다.
+     여기서는 '무엇을 fetch 했고, 어떤 이름으로 a[download] 를 눌렀는가' 를 본다. */
+  const HANGUL = '양식 (최종) 2026 계획서.hwp'
+  // 🔴 globalThis.fetch 를 바꾼다. 번들 안의 코드가 부르는 fetch 는 node 의 전역이라,
+  //    window.fetch 만 바꾸면 진짜로 fake.local 에 붙으러 나간다(그리고 실패한다).
+  const realFetch = globalThis.fetch
+  const realCreate = URL.createObjectURL
+  const realRevoke = URL.revokeObjectURL
+  let fetched = null
+  let clicked = null
+  globalThis.fetch = async (u) => {
+    fetched = String(u)
+    return { ok: true, status: 200, async blob() { return { size: 9, type: 'application/octet-stream' } } }
+  }
+  URL.createObjectURL = () => 'blob:fake/aaa'
+  URL.revokeObjectURL = () => {}
+  const realClick = window.HTMLAnchorElement.prototype.click
+  window.HTMLAnchorElement.prototype.click = function fake() {
+    clicked = { href: this.getAttribute('href'), download: this.getAttribute('download') }
+  }
+
+  // 한글·공백·괄호가 든 이름으로 다시 그린다 (링크가 굳혀 둔 파일 정보만 바꾼다)
+  store.rows.shares[0].files = [{ name: HANGUL, size: 9,
+    url: 'https://fake.local/sign/archive-files/it/1_a.hwp?token=T&download=' + encodeURIComponent(HANGUL) }]
+  act(() => { m.root.unmount() })
+  m = mount(React.createElement(SharePage, { token: made.id }))
+  await act(async () => {})
+  const dl = q(m.host, '.share-files .file-open')
+  check('받기: 목록에는 한글 이름이 그대로', m.host.textContent.includes(HANGUL))
+  await act(async () => { click(dl) })
+  check('받기: 서명 주소를 직접 받아 온다', fetched === store.rows.shares[0].files[0].url, fetched)
+  check('받기: blob 주소로 저장한다 (헤더에 안 기댄다)',
+    clicked?.href === 'blob:fake/aaa', JSON.stringify(clicked))
+  check('받기: 저장 이름이 한글 원본 그대로', clicked?.download === HANGUL, clicked?.download)
+  check('받기: 퍼센트 인코딩이 이름에 새지 않는다',
+    !/%[0-9A-F]{2}/i.test(clicked?.download ?? ''), clicked?.download)
+
+  // 받다가 실패하면? 이름이 깨질지언정 파일은 손에 넣어야 한다 — 원래 주소로 연다
+  fetched = null; clicked = null
+  globalThis.fetch = async () => { throw new Error('offline') }
+  await act(async () => { click(q(m.host, '.share-files .file-open')) })
+  check('받기: 못 받으면 원래 주소로 열어 준다',
+    clicked?.href === store.rows.shares[0].files[0].url, JSON.stringify(clicked))
+
+  globalThis.fetch = realFetch
+  URL.createObjectURL = realCreate
+  URL.revokeObjectURL = realRevoke
+  window.HTMLAnchorElement.prototype.click = realClick
   check('유효: 열람 전용이라고 적혀 있다', m.host.textContent.includes(VIEW_ONLY_NOTE))
   check('열람 전용: 저장·삭제 버튼이 없다',
     !m.host.textContent.includes('삭제') && q(m.host, '.btn-primary') === null)

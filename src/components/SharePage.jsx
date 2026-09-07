@@ -6,7 +6,7 @@
 // 여기에 없다는 것이 이 화면의 요점이다 (src/share.js 머리말 참고).
 import { useEffect, useState } from 'react'
 import { fetchShare, deadTextFor, VIEW_ONLY_NOTE, isMissingShareSchema, SHARE_SETUP_MESSAGE } from '../share.js'
-import { parseImages, fileIcon, formatBytes, extractUrls } from '../supabase.js'
+import { parseImages, fileIcon, formatBytes, extractUrls, downloadAsBlob } from '../supabase.js'
 
 export default function SharePage({ token }) {
   const [state, setState] = useState({ loading: true })
@@ -114,9 +114,23 @@ export default function SharePage({ token }) {
           <ul className="file-list share-files">
             {files.map((f) => (
               <li className="file-row" key={f.url}>
-                {/* 서명 주소는 만들 때 download 이름을 함께 넣어 두었다. 다른 출처라
-                    download 속성은 무시되지만, 서버가 원본 이름으로 내려 준다. */}
-                <a className="file-open" href={f.url} rel="noopener noreferrer" download={f.name}>
+                {/* 🔴 주소를 그냥 열지 않고 받아서 blob 으로 저장한다. 서명 주소는 다른
+                    출처라 download 속성이 무시되고 서버 헤더가 이름을 정하는데, 그 헤더가
+                    한글·괄호가 든 이름에서 깨져 '%EC%96%91....hwp' 로 저장됐다
+                    (supabase.js 의 downloadAsBlob 주석에 실제 응답을 적어 두었다).
+                    a 태그는 그대로 둔다 — 자바스크립트가 막힌 환경에서도, 새 탭으로 열
+                    때도 길이 남아 있어야 한다. 우리가 가로챌 때만 blob 으로 간다. */}
+                <a
+                  className="file-open"
+                  href={f.url}
+                  rel="noopener noreferrer"
+                  download={f.name}
+                  onClick={(e) => {
+                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
+                    e.preventDefault()
+                    downloadAsBlob(f.url, f.name)
+                  }}
+                >
                   <span className="file-icon" aria-hidden="true">{fileIcon(f.name)}</span>
                   <span className="file-name">{f.name}</span>
                   <span className="file-size">{formatBytes(f.size)}</span>

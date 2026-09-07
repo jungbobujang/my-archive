@@ -1306,17 +1306,20 @@ const imagesBucket = () => store.buckets['archive-images']
     item, categories: [], slots: [], userId: 'u1', onClose: () => {}, onSaved: () => {}
   }))
 
-  const grips = () => qa(host, '.img-grip')
-  check('이미지 3장에 손잡이 3개', grips().length === 3, grips().length)
+  // 손잡이(⠿)는 없앴다 — 84px 칸의 왼쪽 위를 덮어 정작 사진이 안 보였다.
+  // 키보드로 옮기는 자리는 썸네일 자체로 옮겼다.
+  const thumbs = () => qa(host, '.img-thumb-open')
+  check('손잡이(⠿)를 그리지 않는다', qa(host, '.img-grip').length === 0)
+  check('이미지 3장 그대로', thumbs().length === 3, thumbs().length)
 
   // 방향키로 옮긴다 (끌기와 같은 moveImage 를 부른다 — jsdom 에는 레이아웃이 없어
   // elementFromPoint 로 하는 좌표 판정은 브라우저 점검(check:mobile)에서 본다)
   const key = (el, k) => act(() => {
     el.dispatchEvent(new window.KeyboardEvent('keydown', { key: k, bubbles: true }))
   })
-  await key(grips()[2], 'ArrowLeft')   // 3 → 2번째
-  await key(grips()[1], 'ArrowLeft')   // 3 → 1번째
-  await key(grips()[2], 'ArrowLeft')   // 2 → 2번째... 아래에서 실제 배열로 확인한다
+  await key(thumbs()[2], 'ArrowLeft')   // 3 → 2번째
+  await key(thumbs()[1], 'ArrowLeft')   // 3 → 1번째
+  await key(thumbs()[2], 'ArrowLeft')   // 2 → 2번째... 아래에서 실제 배열로 확인한다
 
   const shown = () => qa(host, '.img-thumb-open img').map((i) => i.getAttribute('src'))
   check('화면 순서가 바뀌었다', shown().join() !== 'https://x/1.png,https://x/2.png,https://x/3.png', shown().join())
@@ -1406,9 +1409,103 @@ const imagesBucket = () => store.buckets['archive-images']
       image_url: 'https://x/only.png', files: [{ path: 'p/a.pdf', name: 'a.pdf', size: 1 }] },
     categories: [], slots: [], userId: 'u1', onClose: () => {}, onSaved: () => {}
   }))
-  check('이미지 1장이면 손잡이 없음', qa(one.host, '.img-grip').length === 0)
+  check('이미지 1장이면 순서 UI 없음',
+    qa(one.host, '.img-grip').length === 0 && q(one.host, '.img-pickbar') === null)
   check('파일 1개면 ▲▼ 없음', qa(one.host, '.file-move-btn').length === 0)
   act(() => { one.root.unmount() })
+}
+
+/* ── 13-d. 터치 기기: 탭으로 고르고 버튼으로 옮긴다 ──────────────
+   끌기는 폰에서 실사용 불가 판정이 나서 버렸다. 여기서 재는 것은 하나다:
+   **맨 끝 사진을 표지로 만드는 데 탭 두 번이면 되는가** (고르기 → 맨 앞).
+   🔴 matchMedia 를 손으로 심는다. jsdom 에는 없고, 우리 코드는 그것으로 입력 장치를
+      가른다 — 심지 않으면 이 화면을 영영 데스크톱으로만 검사하게 된다. */
+{
+  resetStore()
+  window.sessionStorage.clear()
+  const realMM = window.matchMedia
+  window.matchMedia = (q2) => ({
+    matches: String(q2).includes('pointer: coarse'),
+    media: q2, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}
+  })
+
+  const item = {
+    id: 'i-touch', title: '터치 순서', content: '', link_url: '', tags: [],
+    image_url: 'https://x/1.png\nhttps://x/2.png\nhttps://x/3.png', files: []
+  }
+  store.rows.items.push({ id: 'i-touch', title: '터치 순서', image_url: item.image_url, files: [] })
+  const { host, root } = mount(React.createElement(ItemModal, {
+    item, categories: [], slots: [], userId: 'u1', onClose: () => {}, onSaved: () => {}
+  }))
+  const shown = () => qa(host, '.img-thumb-open img').map((i) => i.getAttribute('src'))
+  const thumbs = () => qa(host, '.img-thumb-open')
+
+  check('터치: 시작 순서 1,2,3', shown().join() === 'https://x/1.png,https://x/2.png,https://x/3.png', shown().join())
+  check('터치: 고르기 전에는 옮기기 줄이 없다', q(host, '.img-pickbar') === null)
+
+  // ① 맨 끝(3번째) 썸네일을 탭 → 고른다
+  await act(async () => { click(thumbs()[2]) })
+  check('터치 ①: 탭하면 고른 표시가 붙는다', qa(host, '.img-thumb.img-picked').length === 1)
+  check('터치 ①: 고른 것이 3번째다', qa(host, '.img-thumb')[2].classList.contains('img-picked'))
+  check('터치 ①: 옮기기 줄이 뜬다', q(host, '.img-pickbar') !== null)
+  check('터치 ①: 몇 번째인지 적는다', q(host, '.img-pickbar-at')?.textContent.includes('3번째'),
+    q(host, '.img-pickbar-at')?.textContent)
+  check('터치 ①: 크게 보기가 아니라 고르기다 (확대창이 안 열린다)', q(host, '.zoom-backdrop') === null)
+
+  // ② [◀ 맨 앞] 한 번 → 표지가 된다. 여기까지 탭 두 번.
+  await act(async () => { click(q(host, '.img-pickbar-first')) })
+  check('터치 ②: 탭 2번에 맨 앞으로 온다',
+    shown().join() === 'https://x/3.png,https://x/1.png,https://x/2.png', shown().join())
+  check('터치 ②: 대표 뱃지가 그 사진에 붙는다',
+    q(host, '.img-thumb')?.querySelector('.img-thumb-tag')?.textContent === '대표')
+  check('터치 ②: 선택은 옮긴 사진을 따라간다',
+    qa(host, '.img-thumb')[0].classList.contains('img-picked'))
+  check('터치 ②: 맨 앞이면 [맨 앞]·[◀] 는 못 누른다',
+    q(host, '.img-pickbar-first').disabled === true)
+
+  // ③ 한 칸씩도 된다
+  const pickBtns = () => qa(host, '.img-pickbar .btn-sm')
+  const next = pickBtns().find((b) => b.getAttribute('aria-label') === '한 칸 뒤로')
+  await act(async () => { click(next) })
+  check('터치 ③: ▶ 한 칸', shown().join() === 'https://x/1.png,https://x/3.png,https://x/2.png', shown().join())
+  const prev = pickBtns().find((b) => b.getAttribute('aria-label') === '한 칸 앞으로')
+  await act(async () => { click(prev) })
+  check('터치 ③: ◀ 한 칸(되돌아온다)', shown().join() === 'https://x/3.png,https://x/1.png,https://x/2.png', shown().join())
+
+  // ④ 선택 해제
+  await act(async () => { click(q(host, '.img-pickbar-off')) })
+  check('터치 ④: 선택을 놓으면 줄이 사라진다', q(host, '.img-pickbar') === null)
+  check('터치 ④: 고른 표시도 사라진다', qa(host, '.img-thumb.img-picked').length === 0)
+  // 같은 썸네일을 다시 탭하면 놓아진다(토글)
+  await act(async () => { click(thumbs()[1]) })
+  await act(async () => { click(thumbs()[1]) })
+  check('터치 ④: 같은 것을 두 번 탭하면 놓는다', q(host, '.img-pickbar') === null)
+
+  // ⑤ 저장 — 바꾼 순서가 그대로 남고 표지도 그 사진이다
+  const before = shown()
+  await act(async () => { click(q(host, '.btn-primary')) })
+  const row = store.rows.items.find((r) => r.id === 'i-touch')
+  const saved = (row?.image_url ?? '').split('\n')
+  check('터치 ⑤: 저장된 순서가 화면과 같다', saved.join() === before.join(), `${saved.join()} / ${before.join()}`)
+  check('터치 ⑤: 카드 표지가 맨 앞으로 올린 사진',
+    parseImages(saved.join('\n'))[0] === 'https://x/3.png', parseImages(saved.join('\n'))[0])
+
+  act(() => { root.unmount() })
+
+  // 터치에서는 끌기를 아예 안 건다 (data-reorder-index 가 붙지 않는다)
+  const again = mount(React.createElement(ItemModal, {
+    item: { ...item, image_url: saved.join('\n') },
+    categories: [], slots: [], userId: 'u1', onClose: () => {}, onSaved: () => {}
+  }))
+  check('터치: 끌기 훅을 안 붙인다',
+    qa(again.host, '.img-thumb[data-reorder-index]').length === 0,
+    qa(again.host, '.img-thumb[data-reorder-index]').length)
+  check('터치: 파일 줄도 끌기를 안 붙인다',
+    qa(again.host, '.file-row[data-reorder-index]').length === 0)
+  act(() => { again.root.unmount() })
+
+  window.matchMedia = realMM
+  resetStore()
 }
 
 // ── 요약 ────────────────────────────────────────────────────

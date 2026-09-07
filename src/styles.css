@@ -690,21 +690,26 @@ a:focus-visible {
   cursor: zoom-in;
 }
 .img-thumb-open img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 빼기(✕) — 우상단 모서리에 작게.
+   🔴 예전에는 좌상단 손잡이(⠿) 와 둘이서 썸네일 윗변을 거의 다 덮었다. 84px 짜리 칸에서
+      그건 '이미지를 고르는 화면' 이 아니라 '단추 두 개가 놓인 화면' 이 된다.
+      손잡이를 없앤 김에 ✕ 도 줄여서, 보이는 것이 다시 사진이 되게 한다. */
 .img-thumb-x {
   position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 22px;
-  height: 22px;
+  top: 1px;
+  right: 1px;
+  width: 18px;
+  height: 18px;
   border: none;
   border-radius: 50%;
-  background: rgba(0, 0, 0, .58);
+  background: rgba(0, 0, 0, .5);
   color: #fff;
-  font-size: 12px;
+  font-size: 10px;
   line-height: 1;
   cursor: pointer;
+  opacity: .85;
 }
-.img-thumb-x:hover { background: rgba(0, 0, 0, .8); }
+.img-thumb-x:hover { background: rgba(0, 0, 0, .8); opacity: 1; }
 .img-thumb-tag {
   position: absolute;
   left: 0;
@@ -721,25 +726,31 @@ a:focus-visible {
    reorder.js 가 non-passive touchmove 로 하고, 여기서는 보이는 것만 맡는다.
    🔴 평소에는 touch-action 을 건드리지 않는다. 썸네일 줄에 none 을 걸어 두면
       그 위에서는 화면을 아예 못 넘긴다 — 순서를 바꿀 일이 없는 사람에게는 고장이다. */
-.reorder-grip {
-  position: absolute;
-  left: 2px;
-  top: 2px;
-  width: 22px;
-  height: 22px;
-  border: none;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, .58);
-  color: #fff;
-  font-size: 12px;
-  line-height: 1;
-  cursor: grab;
-  opacity: 0;
-  transition: opacity .12s;
+/* 손잡이(⠿)는 없앴다. 마우스에서는 썸네일 아무 데나 잡아 끌면 되고(끌기는 그대로),
+   키보드는 썸네일 자체에서 ←→ 로 옮긴다. 폰에서는 아래 img-pickbar 가 대신한다.
+   🔴 손잡이는 22px 짜리 원이 84px 칸의 왼쪽 위를 덮어, 정작 무슨 사진인지 안 보였다. */
+
+/* 고른 썸네일 (터치) — 테두리로 확실히 표시한다.
+   🔴 옅은 덧칠이 아니라 테두리다. 사진 위에 색을 얹으면 사진이 바뀐 것처럼 보인다. */
+.img-picked { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; }
+
+/* 고른 것을 옮기는 줄 — 스트립 **위**에 둔다. 아래에 두면 버튼을 누를 때마다
+   썸네일이 손가락에 가려 무엇이 어디로 갔는지 안 보인다. */
+.img-pickbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+  padding: 6px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--bg);
 }
-.img-thumb:hover .reorder-grip,
-.reorder-grip:focus-visible { opacity: 1; }
-.reorder-grip:active { cursor: grabbing; }
+.img-pickbar-at { font-size: 12px; font-weight: 700; color: var(--accent); margin-right: 2px; }
+.img-pickbar .btn-sm { min-height: 36px; padding: 4px 10px; }
+.img-pickbar-first { font-weight: 700; }
+.img-pickbar-off { margin-left: auto; }
 
 /* 끌고 있는 것은 옅게, 놓일 자리는 테두리로 알린다.
    🔴 끌리는 것을 감추지 않는다. 사라지면 몇 개짜리 목록인지 순간 흔들려 자리를 못 센다. */
@@ -1848,16 +1859,19 @@ a.card-thumb { cursor: pointer; }
   /* 썸네일 스트립: 지우기 X 와 파일 고르기가 손가락 크기여야 한다.
      스트립 자체는 가로 스크롤이라 장수가 늘어도 폭이 넘치지 않는다. */
   .img-thumb { width: 76px; height: 76px; }
-  /* 폰에서는 손잡이를 늘 보여 준다 — hover 가 없어서 감춰 두면 있는 줄도 모른다 */
-  .reorder-grip { opacity: 1; width: 26px; height: 26px; font-size: 13px; }
-  .reorder-grip::after { content: ''; position: absolute; inset: -6px; }
+  /* 폰에서 옮기기 버튼은 손가락 크기여야 한다. 44px 를 다 주면 한 줄에 안 들어가므로
+     보이는 높이는 36px 로 두고 히트 영역만 넓힌다(.star·.check 와 같은 방식). */
+  .img-pickbar { position: sticky; top: 0; z-index: 1; }
+  .img-pickbar .btn-sm { position: relative; min-height: 36px; }
+  .img-pickbar .btn-sm::after { content: ''; position: absolute; inset: -5px -2px; }
   .file-move-btn { width: 30px; height: 20px; font-size: 9px; }
   .file-move-btn::after { content: ''; position: absolute; inset: -4px -2px; }
   .file-move { position: relative; }
-  .img-thumb-x { width: 28px; height: 28px; font-size: 13px; }
-  /* 시각 크기는 그대로 두고 손가락 범위만 넓힌다(.star·.check 와 같은 방식).
-     44px 를 다 주면 76px 썸네일의 3분의 1을 덮어 '눌러서 크게 보기'를 가로챈다.
-     40px 까지만 넓히고, 크게 보기는 남는 아래·왼쪽 영역이 받는다. */
+  /* 시각 크기는 작게 두고 손가락 범위만 넓힌다(.star·.check 와 같은 방식).
+     🔴 28px 였던 것을 24px 로 줄였다. 76px 썸네일에서 그 차이가 사진 한 귀퉁이를
+        돌려준다 — 여기서 골라야 하는 것은 단추가 아니라 사진이다.
+        히트 영역은 -6px 로 넓혀 36px 급을 지킨다(탭해서 고르기를 가로채지 않는 선). */
+  .img-thumb-x { width: 24px; height: 24px; font-size: 12px; opacity: .9; }
   .img-thumb-x::after { content: ''; position: absolute; inset: -6px; }
   .img-file { min-height: 44px; font-size: 16px; }
 
