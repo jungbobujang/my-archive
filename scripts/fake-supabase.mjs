@@ -136,7 +136,9 @@ function makeQuery(table) {
     update(row) { q._op = 'update'; q._payload = row; return q },
     upsert(rows) { q._op = 'insert'; q._payload = rows; return q },
     delete() { q._op = 'delete'; return q },
-    select() { q._op ??= 'select'; return q },
+    /* select('*', { count: 'exact' }) 의 count 도 답한다. 🔴 안 세면 화면이
+       '전체 undefined개' 로 뜬다 — 점검 스크린샷이 곧 고장 화면이 된다. */
+    select(_cols, opts) { q._op ??= 'select'; q._count = opts && opts.count; return q },
     eq(col, val) { q._filters.push(['eq', col, val]); return q },
     not(col, op, val) { q._filters.push(['not', col, op, val]); return q },
     is(col, val) { q._filters.push(['is', col, val]); return q },
@@ -219,7 +221,9 @@ function run(table, q) {
     return { data: null, error: MISSING_FILES }
   }
   const found = rows.filter((r) => matches(r, q._filters))
-  return { data: q._single ? (found[0] ?? null) : found, error: null }
+  // count 를 물었으면 같이 답한다 (화면의 '전체 N개' 가 이 값을 쓴다)
+  return { data: q._single ? (found[0] ?? null) : found, error: null,
+    count: q._count ? found.length : undefined }
 }
 
 // supabase/setup.sql 의 share_view(p_token) 를 그대로 옮긴 것.

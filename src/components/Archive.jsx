@@ -21,6 +21,17 @@ import { useIdleLock } from '../hooks.js'
 import { useFlip, staggerDelay, playOnce, DUR_MS } from '../motion.js'
 import { readLockConfig, inGrace, endGrace } from '../lock.js'
 
+/* 친 것이 주소인가. 🔴 느슨하게 본다 — http(s):// 로 시작하거나, 공백 없이 점이 들어간
+   덩어리(naver.com/xxx)면 주소로 친다. 엄격한 정규식을 쓰면 정작 사람이 흔히 붙여 넣는
+   모양(끝에 물음표가 붙은 유튜브 주소 등)을 놓친다. 틀려도 손해가 작은 쪽이다 —
+   저장으로 넘어가도 엔터를 안 누르면 아무 일도 일어나지 않는다. */
+function looksLikeUrl(text) {
+  const t = String(text ?? '').trim()
+  if (!t || /\s/.test(t)) return false
+  if (/^https?:\/\//i.test(t)) return true
+  return /^[\w-]+(\.[\w-]+)+(\/|$)/.test(t)
+}
+
 // categoryIds 가 없을 때 넘길 고정 빈 배열 (매번 [] 를 새로 만들면 ItemCard 의 memo 가 풀린다)
 const NO_CATEGORIES = []
 
@@ -68,6 +79,8 @@ export default function Archive({ session, onNavigate }) {
   const gridRef = useFlip([items.map((i) => i.id).join(','), view])
 
   const [quickText, setQuickText] = useState('')
+  const [quickMode, setQuickMode] = useState(false)   // 한 줄 입력칸이 '저장' 쪽인가
+  const omniRef = useRef(null)
   const [quickBusy, setQuickBusy] = useState(false)
   const [quickUpload, setQuickUpload] = useState(0)  // 빠른 저장에서 올리는 중인 장수
   const [quickDrag, setQuickDrag] = useState(false)
@@ -382,6 +395,9 @@ export default function Archive({ session, onNavigate }) {
        (토스트는 화면 구석이라 눈이 거기까지 안 간다). */
     setQuickOk(true)
     setTimeout(() => setQuickOk(false), 900)
+    /* 🔴 저장하고 나면 검색으로 돌아온다. 저장 모드로 남겨 두면 다음에 무심코 친 낱말이
+       검색이 아니라 새 항목이 된다 — 조용히 쌓이는 쓰레기라 알아채기도 늦다. */
+    setQuickMode(false)
     toast.success(isTodo ? '할 것으로 저장했어요' : '저장했어요')
     refresh()
   }
@@ -700,32 +716,15 @@ export default function Archive({ session, onNavigate }) {
         >🗂 아카이브</button>
       </div>
 
+      {/* 검색과 빠른 저장을 **한 줄**로 합쳤다.
+          🔴 예전에는 입력줄 둘이 세로로 쌓여 96px(폰에서는 156px)을 먹었다. 둘 다 '한 줄
+             치는 자리' 인데 모양이 같아서, 어느 칸이 무엇인지도 매번 다시 읽어야 했다.
+          🔴 기본은 **검색**이다. 저장은 [+] 로 들어가거나, 친 것이 주소(URL)면 저절로
+             넘어간다 — 주소를 검색창에 붙여 넣는 일은 거의 언제나 '이거 저장해 줘' 다. */}
       {tab === 'archive' && (
-      <div className="search-row">
-        <div className="search-box">
-          <span className="search-icon" aria-hidden="true">⌕</span>
-          <input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="제목, 내용 통합 검색..."
-            aria-label="아카이브 검색"
-          />
-        </div>
-        <button
-          className={`chip chip-todo ${statusFilter === 'todo' ? 'chip-on' : ''}`}
-          onClick={() => setStatusFilter(statusFilter === 'todo' ? null : 'todo')}
-        >⚡ 할 것{todoCount > 0 ? ` ${todoCount}` : ''}</button>
-        <button
-          className={`chip ${starredOnly ? 'chip-on' : ''}`}
-          onClick={() => setStarredOnly((v) => !v)}
-        >★ 중요</button>
-      </div>
-      )}
-
       <form
-        className={`quick-row ${quickDrag ? 'quick-row-drop' : ''} ${quickOk ? 'quick-ok' : ''}`}
-        onSubmit={quickSave}
+        className={`omni-row ${quickMode ? 'omni-save' : ''} ${quickDrag ? 'quick-row-drop' : ''} ${quickOk ? 'quick-ok' : ''}`}
+        onSubmit={(e) => { if (quickMode) quickSave(e); else e.preventDefault() }}
         onDragOver={(e) => { e.preventDefault(); setQuickDrag(true) }}
         onDragLeave={() => setQuickDrag(false)}
         onDrop={(e) => {
@@ -736,34 +735,66 @@ export default function Archive({ session, onNavigate }) {
           quickSaveImages(files)
         }}
       >
-        <span className="quick-icon" aria-hidden="true">⚡</span>
+        <span className="omni-icon" aria-hidden="true">{quickMode ? '⚡' : '⌕'}</span>
         <input
-          value={quickText}
-          onChange={(e) => setQuickText(e.target.value)}
+          ref={omniRef}
+          type={quickMode ? 'text' : 'search'}
+          value={quickMode ? quickText : search}
+          onChange={(e) => {
+            const v = e.target.value
+            if (quickMode) { setQuickText(v); return }
+            /* 주소를 붙여 넣으면 저장 쪽으로 넘어간다. 🔴 그 자리에서 곧바로 저장하지는
+               않는다 — 사람이 붙여 넣고 나서 제목을 덧붙이는 일이 흔하고, 무엇보다
+               '검색하려 했는데 저장돼 버리는' 것은 되돌리기 어려운 쪽이다. */
+            if (looksLikeUrl(v)) { setQuickMode(true); setQuickText(v); setSearch(''); return }
+            setSearch(v)
+          }}
           onPaste={(e) => {
             const files = imageFilesFromPaste(e)
             if (files.length === 0) return // 이미지가 아니면 평소대로 텍스트 붙여넣기
             e.preventDefault()
             quickSaveImages(files)
           }}
-          placeholder="빠른 저장 — 입력 후 엔터"
-          aria-label="빠른 저장"
+          placeholder={quickMode ? '빠른 저장 — 입력 후 엔터 (!로 시작하면 할 것)' : '제목, 내용 통합 검색…'}
+          aria-label={quickMode ? '빠른 저장' : '아카이브 검색'}
           disabled={quickUpload > 0}
         />
         {/* 저장 직후 잠깐만 뜬다. aria-live 로 화면낭독기에도 같은 사실이 전해진다. */}
         {quickOk && <span className="quick-check" role="status">✓ 저장됨</span>}
+        {quickUpload > 0 && <span className="omni-busy" role="status">{quickUpload}장 올리는 중…</span>}
+        {quickMode && (
+          <button
+            type="submit"
+            className="btn-primary btn-sm"
+            disabled={quickBusy || quickUpload > 0 || !quickText.trim()}
+          >저장</button>
+        )}
         <button
-          type="submit"
-          className="btn-primary btn-sm"
-          disabled={quickBusy || quickUpload > 0 || !quickText.trim()}
-        >저장</button>
+          type="button"
+          className={`omni-toggle ${quickMode ? 'omni-toggle-on' : ''}`}
+          onClick={() => {
+            const next = !quickMode
+            setQuickMode(next)
+            // 치던 글은 넘긴다 — 모드를 바꿨다고 쓴 것이 사라지면 안 된다
+            if (next) { setQuickText(search); setSearch('') } else { setSearch(quickText); setQuickText('') }
+            requestAnimationFrame(() => omniRef.current?.focus())
+          }}
+          aria-pressed={quickMode}
+          aria-label={quickMode ? '검색으로 돌아가기' : '빠른 저장'}
+          title={quickMode ? '검색으로' : '빠른 저장 (주소를 붙여 넣으면 저절로 바뀝니다)'}
+        >{quickMode ? '✕' : '+'}</button>
+        <button
+          type="button"
+          className={`chip chip-todo ${statusFilter === 'todo' ? 'chip-on' : ''}`}
+          onClick={() => setStatusFilter(statusFilter === 'todo' ? null : 'todo')}
+        >⚡ 할 것{todoCount > 0 ? ` ${todoCount}` : ''}</button>
+        <button
+          type="button"
+          className={`chip ${starredOnly ? 'chip-on' : ''}`}
+          onClick={() => setStarredOnly((v) => !v)}
+        >★ 중요</button>
       </form>
-      {/* 좁은 화면에서는 placeholder 에 다 담기지 않아, 입력 중에만 힌트를 보여 준다 */}
-      <p className="quick-hint" aria-live="polite">
-        {quickUpload > 0
-          ? `이미지 ${quickUpload}장 올리는 중…`
-          : '!로 시작하면 ‘할 것’으로 저장돼요 · 이미지는 붙여넣기(Ctrl+V)로 바로 저장'}
-      </p>
+      )}
 
       {tab === 'today' && (
         <Today
@@ -791,24 +822,33 @@ export default function Archive({ session, onNavigate }) {
         </div>
       )}
 
-      <div className="category-grid">
+      {/* 카테고리 — 카드 그리드(8장, 289px)를 한 줄 칩으로 바꿨다.
+          🔴 그 그리드는 첫 화면의 3분의 1을 먹으면서 정작 '무엇을 모아 뒀나' 는 못 보여
+             줬다. 여기서 골라야 하는 것은 카테고리가 아니라 **그 안의 내용**이다.
+          🔴 줄바꿈하지 않고 가로로 스크롤한다. 여덟 개가 두 줄이 되면 그만큼 목록이
+             또 밀려 내려간다 — 줄 수가 데이터에 따라 들쭉날쭉해지는 것도 나쁘다. */}
+      <div className="cat-chips" role="group" aria-label="카테고리">
+        <button
+          className={`chip cat-chip ${categoryId === null ? 'chip-on' : ''}`}
+          onClick={() => setCategoryId(null)}
+        >전체 <i>{total}</i></button>
         {rootCategories.map((c) => (
           <button
             key={c.id}
-            className={`cat-card cat-${c.color} ${categoryId === c.id ? 'cat-on' : ''}`}
+            className={`chip cat-chip cat-chip-${c.color} ${categoryId === c.id ? 'chip-on' : ''}`}
             onClick={() => setCategoryId(categoryId === c.id ? null : c.id)}
+            title={c.name}
           >
-            <span className="cat-icon" aria-hidden="true">{c.icon}</span>
-            <span className="cat-label">{c.name}</span>
-            <span className="cat-count">{subtreeCount(c.id)}개</span>
+            <span aria-hidden="true">{c.icon}</span> {c.name} <i>{subtreeCount(c.id)}</i>
           </button>
         ))}
+        {/* 관리(추가·수정)는 줄 끝의 ⚙ 로 들어간다 — 고르는 일과 고치는 일을 가른다 */}
         <button
-          className="cat-manage"
+          className="chip cat-chip cat-chip-manage"
           onClick={() => setManagerOpen(true)}
           aria-label="카테고리 관리"
           title="카테고리 관리"
-        >⚙️</button>
+        >⚙</button>
       </div>
 
       <div className="list-head">
@@ -870,7 +910,11 @@ export default function Archive({ session, onNavigate }) {
           )}
         </div>
       ) : (
-        <div className={view === 'grid' ? 'item-grid' : 'item-list'} ref={gridRef}>
+        /* 갤러리는 메이슨리(CSS columns)다. 🔴 라이브러리를 쓰지 않는다 — columns 는
+           브라우저가 하는 일이라 카드 수가 늘어도 우리가 계산할 것이 없다.
+           그 대가로 **읽는 순서가 세로**가 된다(1열을 다 채우고 2열). 시간순 목록에서는
+           그게 오히려 자연스럽다 — 위에서 아래로 최신순 한 덩어리씩 읽힌다. */
+        <div className={view === 'grid' ? 'item-masonry' : 'item-list'} ref={gridRef}>
           {items.map((item, i) => {
             /* 이번에 처음 보이는 카드만 떠오른다. 이미 있던 카드는 자리만 옮긴다(FLIP).
                🔴 판정을 한 번 정하고 **그대로 기억한다.** 매번 다시 물으면, 목록이 한 번 더

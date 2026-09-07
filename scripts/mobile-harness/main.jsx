@@ -6,6 +6,9 @@ import ItemModal from '../../src/components/ItemModal.jsx'
 import LockScreen from '../../src/components/LockScreen.jsx'
 import ItemCard from '../../src/components/ItemCard.jsx'
 import { useFlip, staggerDelay } from '../../src/motion.js'
+import Archive from '../../src/components/Archive.jsx'
+import { ToastProvider } from '../../src/components/Toast.jsx'
+import { store } from '../fake-supabase.mjs'
 import '../../src/styles.css'
 
 const params = new URLSearchParams(location.search)
@@ -71,6 +74,51 @@ if (mode === 'multi') {
     splitMode: true
   }))
 }
+
+/* 레이아웃 점검용 — **진짜 Archive** 를 가짜 Supabase 위에 띄운다.
+   🔴 카드만 따로 그려서는 '첫 화면에 몇 장 보이나' 를 잴 수 없다. 그 숫자는 위에 쌓인
+      탭·검색·빠른 저장·카테고리 줄이 자리를 얼마나 먹느냐로 정해지기 때문이다.
+   이미지 카드는 비율을 일부러 섞어 둔다(세로·가로·정사각) — 메이슨리가 그 차이를
+   살리는지 보려는 것이다. */
+if (mode === 'layout') {
+  const svg = (w, h, fill) => 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '">'
+    + '<rect width="' + w + '" height="' + h + '" fill="' + fill + '"/></svg>')
+  const shapes = [[400, 700, '#c9d6c9'], [700, 400, '#d6c9c9'], [500, 500, '#c9c9d6'],
+    [400, 900, '#d6d3c9'], [800, 450, '#c9d6d6']]
+  const names = ['아이디어', '유튜브 대본', '수업 자료', '링크 모음', '읽을 것', '사진', '할 일', '기타']
+  const icons = ['💡', '🎬', '📚', '🔗', '📖', '🖼', '✅', '🗂']
+  const colors = ['purple', 'coral', 'teal', 'blue', 'amber', 'pink', 'green', 'gray']
+  const cats = names.map((name, i) => ({
+    id: 'c' + (i + 1), user_id: 'u1', name, icon: icons[i], color: colors[i],
+    parent_id: null, position: i
+  }))
+  store.rows.categories.push(...cats)
+  const titles = ['짧은 제목', '조금 더 긴 제목이 붙은 항목이라 두 줄까지 갈 수 있다', '제목']
+  for (let i = 0; i < 49; i++) {
+    const textOnly = i % 3 === 2
+    const shape = shapes[i % shapes.length]
+    store.rows.items.push({
+      id: 'it' + (i + 1), user_id: 'u1',
+      title: '항목 ' + (i + 1) + ' — ' + titles[i % 3],
+      content: textOnly ? '텍스트만 있는 카드입니다. '.repeat((i % 4) + 1) : '',
+      tags: i % 4 === 0 ? ['태그'] : [],
+      link_url: null,
+      image_url: textOnly ? null : svg(shape[0], shape[1], shape[2]),
+      files: [], status: 'none', starred: i % 7 === 0, deleted_at: null,
+      created_at: new Date(2026, 0, 1 + (i % 28)).toISOString(),
+      updated_at: new Date(2026, 0, 1 + (i % 28)).toISOString()
+    })
+    store.rows.item_categories.push({ item_id: 'it' + (i + 1), category_id: cats[i % cats.length].id })
+  }
+  localStorage.setItem('archive-tab', 'archive')
+  localStorage.setItem('archive-view', params.get('view') || 'grid')
+  createRoot(document.getElementById('root')).render(
+    <ToastProvider>
+      <Archive session={{ user: { id: 'u1', email: 'a@b.c' } }} onNavigate={() => {}} />
+    </ToastProvider>
+  )
+} else
 
 /* 모션 점검용 화면 — 카드 49장.
    🔴 Archive 를 통째로 띄우지 않는다. 그러려면 로그인·Supabase 를 흉내 내야 하고, 그건

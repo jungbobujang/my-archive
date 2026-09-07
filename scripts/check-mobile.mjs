@@ -27,7 +27,15 @@ const { createServer } = await import('vite')
 const outDir = process.argv[2] ?? path.join(rootDir, 'node_modules', '.cache', 'mobile-shots')
 fs.mkdirSync(outDir, { recursive: true })
 
-const server = await createServer({ root: rootDir, logLevel: 'warn', server: { port: 0 } })
+/* 🔴 하네스는 **가짜 Supabase** 로 돈다. 지금까지는 진짜 클라이언트가 실려 있었는데,
+   레이아웃 점검은 목록을 실제로 받아 와야 해서 그대로 두면 점검이 남의 서버(그리고
+   그날의 연결 상태)에 달리게 된다. 화면 모양을 재는 일에 네트워크가 낄 이유가 없다. */
+const server = await createServer({
+  root: rootDir,
+  logLevel: 'warn',
+  server: { port: 0 },
+  resolve: { alias: { '@supabase/supabase-js': path.join(rootDir, 'scripts/fake-supabase.mjs') } }
+})
 await server.listen()
 const { port } = server.httpServer.address()
 const base = `http://localhost:${port}/scripts/mobile-harness/modal.html`
@@ -635,6 +643,112 @@ check('375px(파일): 용량이 붙어 있다', f.fileSizes.join(' ') === '2.3MB
   check('reduced-motion: 트랜지션 0', /^0s(, 0s)*$/.test(off.trans), off.trans)
   check('reduced-motion: FLIP 도 안 건다', !off.inlineTr, JSON.stringify(off.inlineTr))
   await page.screenshot({ path: path.join(outDir, 'motion-1280.png') })
+  await page.close()
+}
+
+/* ── 레이아웃 2차 ─────────────────────────────────────────────────────
+   진짜 Archive 를 가짜 Supabase 위에 띄우고 네 가지를 잰다.
+     ① 첫 화면(스크롤 전)에 카드가 몇 장 보이나 — 이 작업의 목표 숫자다
+     ② 카테고리가 한 줄 칩인가 (카드 그리드가 사라졌나)
+     ③ 검색·저장이 한 줄인가 (입력줄이 세로로 쌓이지 않나)
+     ④ 메이슨리에서 등장 스태거와 FLIP 이 그대로 도는가 (모션 1차와의 정합) */
+for (const [label, W, H] of [['1280px', 1280, 900], ['375px', 375, 812]]) {
+  const page = await browser.newPage()
+  await page.setViewport({ width: W, height: H, deviceScaleFactor: 1 })
+  await page.goto(`${base}?mode=layout`, { waitUntil: 'networkidle0' })
+  await page.waitForSelector('.card', { timeout: 20000 })
+  await new Promise((r) => setTimeout(r, 700))
+
+  const info = await page.evaluate(() => {
+    const vh = window.innerHeight
+    const cards = [...document.querySelectorAll('.card')]
+    const box = document.querySelector('.item-masonry')
+    return {
+      total: cards.length,
+      fully: cards.filter((c) => c.getBoundingClientRect().bottom <= vh).length,
+      partly: cards.filter((c) => c.getBoundingClientRect().top < vh).length,
+      listTop: Math.round(box ? box.getBoundingClientRect().top : -1),
+      cols: box ? getComputedStyle(box).columnCount : null,
+      catCards: document.querySelectorAll('.cat-card').length,
+      catChips: document.querySelectorAll('.cat-chip').length,
+      chipsWrap: (() => {
+        const el = document.querySelector('.cat-chips')
+        if (!el) return null
+        const tops = [...el.children].map((c) => Math.round(c.getBoundingClientRect().top))
+        return new Set(tops).size          // 1 이면 한 줄
+      })(),
+      inputs: document.querySelectorAll('.omni-row input').length,
+      omniRows: (() => {
+        const el = document.querySelector('.omni-row')
+        return el ? Math.round(el.getBoundingClientRect().height) : -1
+      })(),
+      oldRows: document.querySelectorAll('.search-row, .quick-row').length,
+      docW: document.documentElement.scrollWidth,
+      // 카드가 단 경계에서 잘리지 않는가 (메이슨리의 흔한 사고)
+      broken: cards.filter((c) => getComputedStyle(c).breakInside !== 'avoid').length,
+      // 이미지가 카드를 꽉 채우는가 (여백 최소)
+      imgFull: (() => {
+        const t = document.querySelector('.item-masonry .card-thumb img')
+        if (!t) return null
+        const card = t.closest('.card').getBoundingClientRect()
+        return Math.round(t.getBoundingClientRect().width) >= Math.round(card.width) - 2
+      })(),
+      overlay: !!document.querySelector('.item-masonry .card-thumb + .card-body')
+    }
+  })
+  check(`레이아웃 ${label}: 카드가 그려진다`, info.total > 0, info.total)
+  check(`레이아웃 ${label}: 카테고리 카드 그리드가 없다`, info.catCards === 0, info.catCards)
+  check(`레이아웃 ${label}: 카테고리가 칩 한 줄`, info.chipsWrap === 1, `${info.catChips}개 · ${info.chipsWrap}줄`)
+  check(`레이아웃 ${label}: 입력줄이 하나`, info.inputs === 1 && info.oldRows === 0,
+    `omni ${info.inputs} · 옛 줄 ${info.oldRows}`)
+  check(`레이아웃 ${label}: 메이슨리 다단`, Number(info.cols) >= 2, info.cols)
+  check(`레이아웃 ${label}: 카드가 단에서 안 잘린다`, info.broken === 0, info.broken)
+  check(`레이아웃 ${label}: 이미지가 카드 폭을 채운다`, info.imgFull === true, info.imgFull)
+  check(`레이아웃 ${label}: 제목이 이미지 위 오버레이`, info.overlay === true, info.overlay)
+  check(`레이아웃 ${label}: 가로 스크롤 없음`, info.docW <= W, info.docW)
+  console.log(`INFO  레이아웃 ${label} — 첫 화면 완전 ${info.fully}장 · 일부라도 ${info.partly}장`
+    + ` · 목록 시작 y=${info.listTop}px · ${info.cols}열`)
+  if (label === '1280px') {
+    // 🔴 이 작업의 목표. 기준선은 4장이었다 (카테고리 카드가 289px 을 먹던 때)
+    check('레이아웃 1280px: 첫 화면에 카드 6장 이상', info.fully >= 6, info.fully + '장')
+  }
+
+  // ④ 모션 1차와의 정합 — 메이슨리에서도 스태거·FLIP 이 도는가
+  const motion = await page.evaluate(async () => {
+    const ms = (v) => Math.round(parseFloat(v) * (String(v).includes('ms') ? 1 : 1000))
+    const cards = [...document.querySelectorAll('.card')]
+    const delays = cards.slice(0, 13).map((c) => ms(getComputedStyle(c).animationDelay))
+    const named = getComputedStyle(cards[0]).animationName
+    /* 카테고리 칩을 눌러 목록을 줄였다 늘리며 FLIP 이 걸리는지 본다.
+       🔴 추적할 카드는 **필터 안에서 맨 뒤에 있는 것**으로 고른다. 첫 카드를 쫓으면
+          필터를 걸든 풀든 늘 왼쪽 맨 위라 자리가 안 바뀌고, 그러면 'FLIP 이 안 돈다' 는
+          거짓 실패가 난다 (1280px 에서 실제로 그렇게 잡혔다 — 375px 는 어쩌다 통과했다). */
+    const chip = [...document.querySelectorAll('.cat-chip')][1]
+    chip.click()
+    await new Promise((r) => setTimeout(r, 600))
+    const kept = [...document.querySelectorAll('[data-flip-key]')]
+    const key = kept.length ? kept[kept.length - 1].getAttribute('data-flip-key') : null
+    document.querySelector('.cat-chip').click()        // 전체로 되돌린다
+    const seen = []
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => requestAnimationFrame(r))
+      const el = document.querySelector(`[data-flip-key="${key}"]`)
+      if (el) seen.push({ tr: el.style.transform, trans: el.style.transition })
+    }
+    await new Promise((r) => setTimeout(r, 400))
+    const end = document.querySelector(`[data-flip-key="${key}"]`)
+    return { delays, named, moved: seen.some((f) => /translate/.test(f.tr || '')),
+      played: seen.some((f) => /^transform /.test(f.trans || '')),
+      cleaned: !(end && end.style.transform) }
+  })
+  check(`정합 ${label}: 메이슨리에서도 등장이 걸린다`, motion.named === 'card-in', motion.named)
+  check(`정합 ${label}: 스태거 25ms 씩`, motion.delays.slice(0, 12).every((d, i) => d === i * 25),
+    motion.delays.join(','))
+  check(`정합 ${label}: 메이슨리에서도 FLIP 이 돈다`, motion.moved && motion.played,
+    `이동 ${motion.moved} · 트랜지션 ${motion.played}`)
+  check(`정합 ${label}: 끝나면 인라인 값이 걷힌다`, motion.cleaned, motion.cleaned)
+
+  await page.screenshot({ path: path.join(outDir, `layout-${W}.png`) })
   await page.close()
 }
 

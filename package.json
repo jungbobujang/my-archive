@@ -11,7 +11,8 @@
     "check": "node scripts/check-modals.mjs",
     "check:files": "node scripts/check-files.mjs",
     "check:mobile": "node scripts/check-mobile.mjs",
-    "check:share": "node scripts/check-share.mjs"
+    "check:share": "node scripts/check-share.mjs",
+    "measure:layout": "node scripts/measure-layout.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",

@@ -99,6 +99,13 @@ input, textarea { font: inherit; }
   margin: 0 auto;
   padding: 16px 16px 80px;
 }
+/* 🔴 갤러리(메이슨리)일 때만 통을 넓힌다. 880px 안에서는 넓은 화면에서도 세 열이
+   한계라, 화면의 3분의 1이 여백인 채로 카드가 아래로만 쌓인다.
+   글을 읽는 자리(리스트·오늘·모달)는 그대로 880px 이다 — 한 줄이 길어지면 읽기가
+   나빠진다. 넓혀도 되는 것은 '훑는 화면' 뿐이다. */
+@media (min-width: 1000px) {
+  .archive:has(.item-masonry) { max-width: 1280px; }
+}
 
 /* ---------- 상단 바 ---------- */
 .topbar {
@@ -2212,3 +2219,150 @@ a.card-thumb { cursor: pointer; }
   .card, .img-thumb { transition: none !important; }
   .card:hover { transform: none !important; box-shadow: none !important; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   레이아웃 2차 — 콘텐츠를 주인공으로
+   기준선(1280px): 첫 화면에 카드 4장. 위쪽 UI 가 663px 을 먹고 있었다.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ① 카테고리 — 카드 8장(289px) → 한 줄 칩.
+   🔴 줄바꿈하지 않고 가로로 스크롤한다. 개수에 따라 줄 수가 바뀌면 목록이 시작하는
+      자리도 같이 오르내려서, 화면이 매번 다르게 보인다. */
+.cat-chips {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
+  margin-bottom: 8px;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+.cat-chips::-webkit-scrollbar { height: 6px; }
+.cat-chips::-webkit-scrollbar-thumb { background: var(--line); border-radius: 99px; }
+.cat-chip { flex: 0 0 auto; white-space: nowrap; }
+.cat-chip i { font-style: normal; opacity: .55; margin-left: 3px; font-variant-numeric: tabular-nums; }
+.cat-chip.chip-on i { opacity: .8; }
+/* 관리(⚙)는 고르는 칩이 아니다 — 조금 떨어뜨리고 색도 뺀다 */
+.cat-chip-manage { margin-left: 4px; opacity: .7; }
+.cat-chip-manage:hover { opacity: 1; }
+/* 카테고리 색은 왼쪽 점으로만 — 칩 전체를 물들이면 여덟 개가 나란히 놓였을 때 시끄럽다 */
+.cat-chip[class*="cat-chip-"]:not(.cat-chip-manage)::before {
+  content: '';
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: 1px;
+  background: currentColor;
+  opacity: .45;
+}
+.cat-chip-purple { color: var(--c-purple-mid); }
+.cat-chip-coral { color: var(--c-coral-mid); }
+.cat-chip-teal { color: var(--c-teal-mid); }
+.cat-chip-blue { color: var(--c-blue-mid); }
+.cat-chip-amber { color: var(--c-amber-mid); }
+.cat-chip-pink { color: var(--c-pink-mid); }
+.cat-chip-green { color: var(--c-green-mid); }
+.cat-chip-gray { color: var(--c-gray-mid); }
+.cat-chip.chip-on { color: #fff; }
+
+/* ② 검색 + 빠른 저장 한 줄 */
+.omni-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 4px 6px 4px 10px;
+  margin-bottom: 8px;
+}
+.omni-row:focus-within { border-color: var(--accent); }
+/* 저장 모드일 때만 점선 — '지금 치면 저장된다' 를 테두리로 알린다 */
+.omni-save { border-style: dashed; border-color: var(--accent); }
+.omni-icon { flex: none; opacity: .6; font-size: 14px; }
+.omni-row input {
+  flex: 1 1 200px;
+  min-width: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  padding: 7px 0;
+  outline: none;
+}
+.omni-toggle {
+  flex: none;
+  width: 28px; height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--ink-soft);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.omni-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.omni-toggle-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.omni-busy { flex: none; font-size: 12px; color: var(--ink-faint); }
+
+/* ③ 메이슨리 — CSS columns.
+   🔴 라이브러리를 쓰지 않는다. columns 는 브라우저가 하는 일이라 카드가 몇 장이든
+      우리가 계산할 것이 없고, 창을 줄이면 열 수가 알아서 바뀐다.
+   🔴 카드가 단(column) 경계에서 잘리지 않게 break-inside: avoid 를 반드시 준다. */
+.item-masonry {
+  columns: 4 240px;
+  column-gap: 10px;
+}
+.item-masonry > .card {
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+  page-break-inside: avoid;   /* 옛 사파리 */
+  width: 100%;
+  margin: 0 0 10px;
+  display: block;             /* flex 로 두면 단 안에서 높이 계산이 흔들린다 */
+}
+
+/* ④ 이미지가 곧 카드 — 여백을 걷어내고 제목은 이미지 위에 얹는다.
+   🔴 예전에는 이미지 높이를 120px 로 잘라 놓아서, 세로로 긴 사진은 가운데만 남고
+      가로로 긴 사진은 위아래가 잘렸다. 메이슨리에서는 자를 이유가 없다 —
+      길이가 곧 그 카드의 자리다. */
+.item-masonry .card-thumb img { height: auto; aspect-ratio: auto; }
+.item-masonry .card-thumb { position: relative; }
+/* 제목을 이미지 아래쪽에 겹친다. 어두운 그라데이션 위라 어떤 사진에서도 읽힌다. */
+.item-masonry .card-thumb + .card-body {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  padding: 22px 10px 8px;
+  background: linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,.38) 55%, transparent);
+  pointer-events: none;   /* 사진을 눌러 여는 길을 막지 않는다 */
+}
+.item-masonry .card-thumb + .card-body .card-title,
+.item-masonry .card-thumb + .card-body .card-preview { color: #fff; pointer-events: auto; }
+.item-masonry .card-thumb + .card-body .card-title { font-size: 13px; line-height: 1.4; }
+.item-masonry .card-thumb + .card-body .star { color: rgba(255,255,255,.8); pointer-events: auto; }
+.item-masonry .card-thumb + .card-body .star-on { color: var(--c-amber-mid); }
+/* 오버레이에서는 뱃지 줄을 감춘다 — 사진 위에 색 상자를 겹치면 사진이 안 보인다.
+   같은 정보는 카드를 열면 다 있다. */
+.item-masonry .card-thumb + .card-body .card-meta,
+.item-masonry .card-thumb + .card-body .card-date { display: none; }
+/* 이미지 카드는 겉을 감싼 상자가 아니라 사진 자체가 카드다 */
+.item-masonry .card:has(.card-thumb) { border-left-width: 1px; position: relative; }
+/* 글만 있는 카드는 그대로 상자다 (여백은 조금 줄인다) */
+.item-masonry .card-body { padding: 9px 11px; }
+
+@media (max-width: 900px) { .item-masonry { columns: 3 200px; } }
+@media (max-width: 640px) { .item-masonry { columns: 2 150px; column-gap: 8px; } }
+
+/* 이미지 높이의 상한. 🔴 '원본 비율대로' 와 충돌하지 않는다 — 비율은 그대로 두되
+   한 장이 화면을 통째로 먹는 것만 막는다. 400×900 같은 사진은 300px 폭에서 675px 이
+   되는데, 그러면 그 카드 하나로 첫 화면이 끝난다. 상한에 걸린 것만 위를 남기고 자른다
+   (사진의 주인공은 대개 위쪽에 있다). */
+.item-masonry .card-thumb img { max-height: 300px; object-fit: cover; object-position: top; }
+/* 넓은 화면에서는 열을 하나 더 — 1280px 에서 다섯 줄이 들어간다 */
+@media (min-width: 1200px) { .item-masonry { columns: 5 210px; } }
+/* 폰에서는 상한을 더 낮춘다. 🔴 두 열이라 카드 폭이 이미 좁은데 사진만 길면
+   한 화면에 한 장 반이 되고, 그러면 '모아 둔 것을 훑는' 화면이 아니게 된다. */
+@media (max-width: 640px) { .item-masonry .card-thumb img { max-height: 200px; } }

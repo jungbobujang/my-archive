@@ -1566,6 +1566,12 @@ const imagesBucket = () => store.buckets['archive-images']
     created_at: new Date(2026, 0, 1).toISOString(), updated_at: new Date(2026, 0, 1).toISOString()
   }))
   store.rows.items.push(...mk(15))
+  // 카테고리 칩을 제대로 재려면 카테고리도 있어야 한다 (개수까지 붙는지 본다)
+  store.rows.categories.push(
+    { id: 'c1', user_id: 'u1', name: '아이디어', icon: '💡', color: 'purple', parent_id: null, position: 0 },
+    { id: 'c2', user_id: 'u1', name: '자료', icon: '📚', color: 'teal', parent_id: null, position: 1 })
+  store.rows.item_categories.push({ item_id: 'it1', category_id: 'c1' },
+    { item_id: 'it2', category_id: 'c1' }, { item_id: 'it3', category_id: 'c2' })
   // 🔴 기본 탭은 '오늘' 이다 — 카드 목록은 '보관함' 탭에 있다
   window.localStorage.setItem('archive-tab', 'archive')
   const m = mount(React.createElement(ToastProvider, null,
@@ -1604,8 +1610,30 @@ const imagesBucket = () => store.buckets['archive-images']
      (네이티브 setter 를 거쳐도 그렇다. 같은 트리의 버튼 클릭은 정상으로 돈다 —
      위 '중요' 칩이 그 증거다). 억지로 흉내 내면 재는 것은 화면이 아니라 우리 흉내다.
      클래스가 실제로 있고 규칙대로 도는지는 브라우저 점검(mode=motion)이 본다. */
-  check('모션: 빠른 저장 줄이 있다', !!q(m.host, '.quick-row input'))
+  /* 검색·저장이 한 줄이다(레이아웃 2차). 🔴 입력칸이 **하나**여야 한다 —
+     둘이 세로로 쌓이던 것이 이 작업에서 걷어낸 것이고, 다시 늘어나면 여기서 걸린다. */
+  check('레이아웃: 입력줄이 하나로 합쳐졌다',
+    qa(m.host, '.omni-row input').length === 1 && qa(m.host, '.search-row, .quick-row').length === 0,
+    qa(m.host, '.omni-row input').length + ' / 옛 줄 ' + qa(m.host, '.search-row, .quick-row').length)
+  check('레이아웃: 기본은 검색 모드', q(m.host, '.omni-row input')?.getAttribute('type') === 'search',
+    q(m.host, '.omni-row input')?.getAttribute('type'))
+  check('레이아웃: 저장으로 넘어가는 [+] 가 있다', !!q(m.host, '.omni-toggle'))
   check('모션: 저장 전에는 체크가 없다', q(m.host, '.quick-check') === null)
+  // [+] 를 누르면 저장 모드로 바뀐다 (버튼 클릭은 jsdom 에서도 정상으로 돈다)
+  await act(async () => { q(m.host, '.omni-toggle').click() })
+  check('레이아웃: [+] 로 저장 모드가 된다',
+    q(m.host, '.omni-row')?.classList.contains('omni-save')
+    && q(m.host, '.omni-row input')?.getAttribute('type') === 'text',
+    q(m.host, '.omni-row')?.className)
+  check('레이아웃: 저장 모드에서는 저장 버튼이 뜬다', !!q(m.host, '.omni-row .btn-primary'))
+  await act(async () => { q(m.host, '.omni-toggle').click() })
+  check('레이아웃: 다시 누르면 검색으로 돌아온다',
+    !q(m.host, '.omni-row')?.classList.contains('omni-save'))
+  // 카테고리는 카드 그리드가 아니라 칩 한 줄이다
+  check('레이아웃: 카테고리 카드 그리드가 없다', qa(m.host, '.cat-card').length === 0)
+  check('레이아웃: 카테고리 칩이 있다 (전체 + 관리 포함)', qa(m.host, '.cat-chip').length >= 3,
+    qa(m.host, '.cat-chip').length)
+  check('레이아웃: 관리(⚙)가 칩 줄 끝에 있다', !!q(m.host, '.cat-chip-manage'))
   act(() => { m.root.unmount() })
   resetStore()
 }

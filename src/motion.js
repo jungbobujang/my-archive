@@ -29,6 +29,33 @@ export function staggerDelay(i) {
   return i < STAGGER_MAX ? i * STAGGER_MS : 0
 }
 
+/* 요소의 '가만히 있을 때의 자리'.
+ *
+ * 🔴 getBoundingClientRect 를 그대로 쓰면 안 된다. 그 값은 **transform 이 얹힌 뒤**의
+ *    자리라, 카드가 아직 등장 애니메이션(12px 아래) 중이면 그 12px 이 원래 자리로
+ *    기록되고 다음 이동이 어긋난 데서 출발한다 (점검이 28 vs 16 으로 잡았다).
+ *    그래서 지금 걸린 transform 의 이동분을 **빼서** 되돌린다.
+ * 🔴 offsetLeft/Top 을 쓰지 않는 이유: 메이슨리(CSS columns)에서는 요소가 단(column)
+ *    조각 안에 놓여 offset* 이 화면에서 보이는 자리와 어긋난다. rect 는 어디에 놓이든
+ *    화면 좌표 그대로다.
+ * 🔴 스크롤을 더해 문서 좌표로 만든다. 두 측정 사이에 화면이 굴러가면 그 차이가
+ *    '이동' 으로 오해되기 때문이다.
+ */
+function restPosition(el) {
+  const r = el.getBoundingClientRect()
+  let tx = 0
+  let ty = 0
+  const t = getComputedStyle(el).transform
+  if (t && t !== 'none') {
+    try {
+      const m = new DOMMatrixReadOnly(t)
+      tx = m.m41
+      ty = m.m42
+    } catch { /* DOMMatrix 를 모르는 브라우저면 보정 없이 간다 */ }
+  }
+  return { x: r.left - tx + window.scrollX, y: r.top - ty + window.scrollY }
+}
+
 /**
  * FLIP — 자리가 바뀐 요소를 '순간이동' 대신 미끄러지게 한다.
  *
@@ -59,13 +86,7 @@ export function useFlip(deps, opt = {}) {
 
     for (const el of box.querySelectorAll('[data-flip-key]')) {
       const key = el.getAttribute('data-flip-key')
-      /* 🔴 위치는 offsetLeft/Top 으로 잰다 — getBoundingClientRect 가 아니다.
-         rect 는 **transform 이 얹힌 뒤의 자리**라, 카드가 아직 등장 애니메이션(12px 아래)
-         중이면 그 12px 이 '원래 자리' 로 기록된다. 그러면 다음 이동이 12px 어긋난 데서
-         출발해 한 번 튄다 (실제로 브라우저 점검에서 28 vs 16 으로 잡혔다).
-         offset* 은 레이아웃 값이라 transform 과 스크롤에 흔들리지 않는다. */
-      const x = el.offsetLeft
-      const y = el.offsetTop
+      const { x, y } = restPosition(el)
       next.set(key, { x, y })
       const was = prev.current.get(key)
       if (!was) continue                       // 새로 들어온 것 — 이동이 아니라 등장이다
