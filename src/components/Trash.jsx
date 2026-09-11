@@ -5,6 +5,7 @@ import {
 } from '../supabase.js'
 import { useEscapeKey } from '../hooks.js'
 import { useFlip, playOnce } from '../motion.js'
+import { spaceOf, spaceLabel } from '../spaces.js'
 import { SkeletonRows } from './Skeleton.jsx'
 
 function deletedLabel(iso) {
@@ -12,7 +13,11 @@ function deletedLabel(iso) {
   return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()} 삭제`
 }
 
-export default function Trash({ onClose, onChanged }) {
+/* 휴지통은 **전 공간 통합**이다 (요구사항 5).
+   지운 것을 찾으러 오는 자리에서 서랍까지 맞춰야 보인다면, 어느 서랍에서 지웠는지를
+   사람이 기억하고 있어야 한다는 뜻이 된다. 대신 줄마다 어느 공간의 것인지 적는다.
+   spaces 가 null 이면 공간 열이 아직 없는 DB 라, 표시도 하지 않는다. */
+export default function Trash({ spaces, onClose, onChanged }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -105,7 +110,9 @@ export default function Trash({ onClose, onChanged }) {
         ) : (
           <>
             <div className="trash-top">
-              <span className="list-title">{rows.length}개</span>
+              <span className="list-title">
+                {rows.length}개{spaces ? ' · 모든 공간' : ''}
+              </span>
               <button className="btn-danger btn-sm" onClick={purgeAll} disabled={busy}>전부 비우기</button>
             </div>
 
@@ -114,7 +121,12 @@ export default function Trash({ onClose, onChanged }) {
                 <li key={item.id} className="trash-row" data-flip-key={item.id}>
                   <div className="trash-main">
                     <span className="trash-title">{item.title}</span>
-                    <span className="trash-date">{deletedLabel(item.deleted_at)}</span>
+                    <span className="trash-date">
+                      {spaces && (
+                        <span className="trash-space">{spaceLabel(spaces, spaceOf(item))}</span>
+                      )}
+                      {deletedLabel(item.deleted_at)}
+                    </span>
                   </div>
                   <div className="trash-actions">
                     <button className="btn-ghost btn-sm" onClick={() => restore(item)} disabled={busy}>복원</button>

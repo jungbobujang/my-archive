@@ -12,13 +12,14 @@
 -- 만드는 것
 --   1) categories     계층 카테고리
 --   2) time_slots     '오늘' 탭의 시간대
+--  2-b) spaces        공간(서랍). 한 계정 안에서 아카이브를 나눈다
 --   3) items          본문(아이디어/대본/링크/할 일)
 --   4) item_categories  항목 <-> 카테고리 다대다
 --   5) RLS 정책 (본인 데이터만)
 --   6) 이미지 스토리지 버킷 archive-images
 --   7) 파일 스토리지 버킷 archive-files (비공개)
 --   8) updated_at 자동 갱신
---   9) 신규 가입자 기본 카테고리 4종 + 시간대 5종 자동 생성
+--   9) 신규 가입자 기본 카테고리 4종 + 시간대 5종 + 공간 2종 자동 생성
 --  10) 항목 공유 링크 shares + 열람 함수 share_view (로그인 없이 한 항목만 보기)
 -- ============================================================
 
@@ -37,11 +38,19 @@ create table if not exists public.categories (
   -- 상위를 지우면 하위는 최상위로 올라온다 (함께 지우려면 cascade 로)
   parent_id uuid references public.categories(id) on delete set null,
   position int default 0,
+  -- 카테고리도 공간별로 나뉜다 (요구사항 4). 항목과 같은 규칙으로,
+  -- 이 열이 생기는 순간 기존 카테고리는 전부 '개인'으로 편입된다.
+  space text not null default 'personal',
   created_at timestamptz default now()
 );
 
+-- 이미 카테고리 표가 있는 프로젝트를 위한 따라잡기
+alter table public.categories add column if not exists space text not null default 'personal';
+
 create index if not exists categories_user_pos_idx
   on public.categories (user_id, position);
+create index if not exists categories_user_space_idx
+  on public.categories (user_id, space, position);
 create index if not exists categories_parent_idx
   on public.categories (parent_id);
 
@@ -71,6 +80,40 @@ alter table public.time_slots enable row level security;
 
 drop policy if exists "own time_slots all" on public.time_slots;
 create policy "own time_slots all" on public.time_slots
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+
+-- ============================================================
+-- 2-b) 공간 (서랍) — 한 계정 안에서 아카이브를 나눈다
+--
+--    항목·카테고리가 들고 다니는 것은 **열쇠(key) 문자열 하나**뿐이다.
+--    이 표는 그 열쇠에 붙는 이름·아이콘만 담는다 — 이름을 바꿔도 항목은
+--    한 줄도 건드리지 않는다.
+--
+--    🔴 items.space 를 이 표로 **외래키로 묶지 않았다.** 묶으면 기존 행을
+--       옮기는 마이그레이션이 필요해지고(그 전에는 열을 추가할 수도 없다),
+--       백업 복원 순서도 한 겹 더 늘어난다. 지금은 열 하나에 기본값을 주는
+--       것만으로 기존 자료가 전부 '개인'으로 편입된다. 목록에 없는 열쇠가
+--       들어와도 화면은 그 열쇠를 그대로 보여 준다(src/spaces.js spaceLabel).
+-- ============================================================
+create table if not exists public.spaces (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- src/spaces.js 의 DEFAULT_SPACE · BUILTIN_SPACES 와 같은 값이어야 한다
+  key text not null,
+  name text not null,
+  icon text default '🗂',
+  position int default 0,
+  created_at timestamptz default now(),
+  primary key (user_id, key)
+);
+
+create index if not exists spaces_user_pos_idx
+  on public.spaces (user_id, position);
+
+alter table public.spaces enable row level security;
+
+drop policy if exists "own spaces all" on public.spaces;
+create policy "own spaces all" on public.spaces
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 
@@ -107,6 +150,10 @@ create table if not exists public.items (
   -- src/supabase.js 의 '일반 파일 첨부' 주석에 적어 두었다.
   files jsonb not null default '[]'::jsonb,
 
+  -- 어느 공간(서랍)에 있는가. 기본값이 곧 마이그레이션이다 —
+  -- 이 열이 생기는 순간 기존 항목은 전부 '개인'(personal)으로 편입된다.
+  space text not null default 'personal',
+
   -- 휴지통(soft delete). null 이면 살아 있는 항목.
   deleted_at timestamptz,
 
@@ -125,12 +172,16 @@ alter table public.items add column if not exists slot_id uuid
 alter table public.items add column if not exists link_url text;
 alter table public.items add column if not exists deleted_at timestamptz;
 alter table public.items add column if not exists files jsonb not null default '[]'::jsonb;
+alter table public.items add column if not exists space text not null default 'personal';
 
 -- v1.0 에서 category 가 not null 이었다. 코드가 값을 넣지 않으므로 제약을 푼다.
 alter table public.items alter column category drop not null;
 
 create index if not exists items_user_created_idx
   on public.items (user_id, created_at desc);
+-- 목록은 언제나 '한 공간 안에서 최근 순' 이다 — 그 조회가 이 인덱스 하나로 끝난다
+create index if not exists items_user_space_created_idx
+  on public.items (user_id, space, created_at desc) where deleted_at is null;
 create index if not exists items_tags_idx
   on public.items using gin (tags);
 -- '오늘' 탭: 할 일만 골라 본다
@@ -259,7 +310,7 @@ create trigger items_touch before update on public.items
 
 
 -- ============================================================
--- 8) 기본 카테고리 4종 + 시간대 5종
+-- 8) 기본 카테고리 4종 + 시간대 5종 + 공간 2종
 --
 --    security definer 라 RLS 를 우회한다. 시드를 넣는 시점에는
 --    auth.uid() 가 비어 있기 때문이다(SQL Editor 실행, 가입 트리거 모두).
@@ -288,6 +339,14 @@ begin
       (uid, '오후', '🌤', 3),
       (uid, '저녁', '🌇', 4),
       (uid, '밤',   '🌙', 5);
+  end if;
+
+  -- 공간 2종. 열쇠는 src/spaces.js 의 BUILTIN_SPACES 와 같아야 한다.
+  -- 이름을 바꾼 사람에게 기본 이름이 되살아나지 않도록 '하나라도 있으면 건너뛴다'.
+  if not exists (select 1 from public.spaces where user_id = uid) then
+    insert into public.spaces (user_id, key, name, icon, position) values
+      (uid, 'personal', '개인', '🏠', 1),
+      (uid, 'class',    '수업', '🏫', 2);
   end if;
 end;
 $$;

@@ -16,6 +16,7 @@ import {
   treeOrder, categoryPath,
   stripInvisibleAll, saveErrorMessage, byteLength, DRAFT_DEBOUNCE_MS, DRAFT_MAX_BYTES
 } from '../supabase.js'
+import { DEFAULT_SPACE, spaceOf, findSpace } from '../spaces.js'
 import { useEscapeKey, confirmDiscard, draftKeyFor, readDraft, writeDraft, clearDraft } from '../hooks.js'
 import { useOptionalToast } from './Toast.jsx'
 import ShareDialog from './ShareDialog.jsx'
@@ -70,7 +71,10 @@ function isMissingFilesColumn(err) {
 }
 
 
-export default function ItemModal({ item, categories, slots, userId, onClose, onSaved }) {
+// categories 에는 **전 공간의 카테고리**가 들어온다. 다른 공간으로 옮기는 순간
+// 그 공간의 카테고리를 보여 줘야 하기 때문이다 — 아래 spaceCategories 가 걸러 쓴다.
+// spaces 가 null 이면 공간 열이 아직 없는 DB 라, 공간 칸을 통째로 접는다.
+export default function ItemModal({ item, categories, slots, spaces, space, userId, onClose, onSaved }) {
   const isEdit = !!item
   // 저장 실패는 모달 안의 한 줄(.form-error)만으로는 놓치기 쉽다 — 저장에 성공하면 모달이
   // 닫히고, 실패해도 긴 폼에서는 그 줄이 화면 밖에 있을 수 있다. 그래서 토스트도 함께 띄운다.
@@ -86,6 +90,11 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   const [content, setContent] = useState(draft?.content ?? item?.content ?? '')
   const [categoryIds, setCategoryIds] = useState(
     draft?.categoryIds ?? (item?.category_id ? [item.category_id] : [])
+  )
+  /* 이 항목이 들어갈 서랍. 수정 중이면 항목이 있던 곳, 새 항목이면 지금 보고 있는 곳.
+     🔴 바꾸면 그것이 곧 '옮기기' 다 (요구사항 6) — 저장할 때 space 열이 바뀐다. */
+  const [itemSpace, setItemSpace] = useState(
+    draft?.space ?? (item ? spaceOf(item) : (space ?? DEFAULT_SPACE))
   )
   const [status, setStatus] = useState(draft?.status ?? item?.status ?? 'none')
   const [dueDate, setDueDate] = useState(draft?.dueDate ?? item?.due_date ?? '')
@@ -148,6 +157,24 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
 
   // 링크마다 개별 항목으로 나눌지 (링크가 2개 이상일 때만 고를 수 있다)
   const [splitMode, setSplitMode] = useState(draft?.splitMode ?? false)
+
+  /* 고른 서랍의 카테고리만 보여 준다. 카테고리는 공간별로 갈라져 있어서,
+     전부 늘어놓으면 다른 서랍의 이름이 섞여 어느 것이 지금 쓸 수 있는 것인지 알 수 없다. */
+  const spaceCategories = useMemo(
+    () => (spaces ? (categories ?? []).filter((c) => spaceOf(c) === itemSpace) : (categories ?? [])),
+    [categories, spaces, itemSpace]
+  )
+
+  /* 서랍 바꾸기 = 옮기기. 고른 소속도 함께 놓는다 — 카테고리는 공간마다 따로라
+     옮긴 뒤에도 붙어 있으면 저쪽 목록에서 보이지 않는 소속이 된다. */
+  function changeSpace(key) {
+    if (key === itemSpace) return
+    setItemSpace(key)
+    setCategoryIds((prev) => prev.filter((id) => {
+      const c = (categories ?? []).find((x) => x.id === id)
+      return !!c && spaceOf(c) === key
+    }))
+  }
 
   // '바뀌었는지' 를 재는 기준선. 수정 모드의 소속은 아래에서 비동기로 불러오므로
   // 그때 같이 갱신한다 — 안 그러면 열자마자 '바뀜' 으로 잡혀 Esc 마다 확인창이 뜬다.
@@ -225,6 +252,8 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
       status !== (item?.status ?? 'none') ||
       dueDate !== (item?.due_date ?? '') ||
       slotId !== (item?.slot_id ?? null) ||
+      // 옮기기도 '바뀜' 이다 — 서랍만 바꾸고 Esc 를 눌렀을 때 말없이 사라지면 안 된다
+      itemSpace !== (item ? spaceOf(item) : (space ?? DEFAULT_SPACE)) ||
       joinImages(imgs) !== joinImages(savedImages) ||
       !sameSet(categoryIds, baseCategoryIds)
     )
@@ -237,7 +266,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
   function draftBody(imgs) {
     return {
       title, content, links, linkInput, tagsText, categoryIds, status, dueDate, slotId,
-      images: imgs, splitMode
+      space: itemSpace, images: imgs, splitMode
     }
   }
 
@@ -274,7 +303,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
       writeDraft(draftKey, draftBody(images))
     }, DRAFT_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [draftKey, dirty, title, content, links, linkInput, tagsText, categoryIds, status, dueDate, slotId, images, splitMode])
+  }, [draftKey, dirty, title, content, links, linkInput, tagsText, categoryIds, status, dueDate, slotId, itemSpace, images, splitMode])
 
   // 저장하지 않고 닫을 때: 이번에 올려 둔 이미지·파일을 스토리지에서 지운다.
   //
@@ -339,6 +368,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
     setStatus(item?.status ?? 'none')
     setDueDate(item?.due_date ?? '')
     setSlotId(item?.slot_id ?? null)
+    setItemSpace(item ? spaceOf(item) : (space ?? DEFAULT_SPACE))
     setImages(parseImages(item?.image_url))
     setFiles(parseFiles(item?.files))
     setSplitMode(false)
@@ -599,6 +629,8 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
       // 할 것이 아니면 일정 정보는 남기지 않는다
       due_date: status === 'todo' ? (dueDate || null) : null,
       slot_id: status === 'todo' ? slotId : null,
+      // 공간 열이 없는 DB 에는 **보내지 않는다** — 없는 열을 보내면 저장이 통째로 튕긴다
+      ...(spaces ? { space: itemSpace } : {}),
       user_id: userId
     }
   }
@@ -901,13 +933,40 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
           </div>
         )}
 
+        {/* 공간(서랍). 바꾸면 저장할 때 그 서랍으로 옮겨진다.
+            🔴 새 항목에서도 보여 준다 — '지금 어느 서랍에 넣는 중인지' 를 저장 전에
+               확인할 수 있어야, 엉뚱한 곳에 넣고 나중에 찾아 헤매는 일이 없다. */}
+        {spaces && spaces.length > 0 && (
+          <div className="field">
+            공간
+            <div className="cat-select">
+              {spaces.map((s) => (
+                <button
+                  key={s.key}
+                  type="button"
+                  className={`chip ${itemSpace === s.key ? 'chip-on' : ''}`}
+                  onClick={() => changeSpace(s.key)}
+                  aria-pressed={itemSpace === s.key}
+                  disabled={busy}
+                >{s.icon ?? '🗂'} {s.name}</button>
+              ))}
+            </div>
+            {isEdit && itemSpace !== spaceOf(item) && (
+              <p className="field-note">
+                저장하면 <b>{findSpace(spaces, itemSpace)?.name ?? itemSpace}</b> 공간으로 옮겨집니다
+                {baseCategoryIds.length > 0 ? ' · 카테고리 소속은 공간마다 달라서 새로 골라야 해요' : ''}
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="field">
           카테고리 {categoryIds.length === 0 ? '(미분류)' : `(${categoryIds.length}개 선택)`}
           {/* 트리 차례로 늘어놓고, 3단부터는 바로 위 상위를 앞에 붙인다.
               '국내'·'해외'·'기타' 처럼 짧은 이름은 그것만 봐서는 무엇의 하위인지 모른다. */}
           <div className="cat-select">
-            {treeOrder(categories).map(({ cat: c, depth }) => {
-              const path = depth >= 2 ? categoryPath(categories, c.id).slice(-1)[0] : null
+            {treeOrder(spaceCategories).map(({ cat: c, depth }) => {
+              const path = depth >= 2 ? categoryPath(spaceCategories, c.id).slice(-1)[0] : null
               return (
                 <button
                   key={c.id}
@@ -916,7 +975,7 @@ export default function ItemModal({ item, categories, slots, userId, onClose, on
                   onClick={() => setCategoryIds((prev) => (
                     prev.includes(c.id) ? prev.filter((x) => x !== c.id) : [...prev, c.id]
                   ))}
-                  title={[...categoryPath(categories, c.id), c.name].join(' › ')}
+                  title={[...categoryPath(spaceCategories, c.id), c.name].join(' › ')}
                 >
                   {path && <span className="chip-path">{path} › </span>}
                   {c.icon} {c.name}

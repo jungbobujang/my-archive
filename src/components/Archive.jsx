@@ -6,6 +6,10 @@ import {
   joinImages, uploadImage, imageFilesFromPaste, imageFilesFromDrop, ymd, MAX_IMAGES,
   parseFiles, removeStorageImages, stripInvisible, saveErrorMessage
 } from '../supabase.js'
+import {
+  DEFAULT_SPACE, BUILTIN_SPACES, SPACE_COLUMN_MESSAGE,
+  probeSpaceColumn, loadSpaces, readSpacePref, writeSpacePref, spaceOf, findSpace
+} from '../spaces.js'
 import { useTheme } from '../theme.js'
 import { useToast } from './Toast.jsx'
 import ItemModal from './ItemModal.jsx'
@@ -14,6 +18,7 @@ import CategoryManager from './CategoryManager.jsx'
 import MindMap from './MindMap.jsx'
 import Today from './Today.jsx'
 import Trash from './Trash.jsx'
+import SpaceSwitcher from './SpaceSwitcher.jsx'
 import { SkeletonCards } from './Skeleton.jsx'
 import Settings from './Settings.jsx'
 import LockScreen from './LockScreen.jsx'
@@ -24,6 +29,10 @@ import { readLockConfig, inGrace, endGrace } from '../lock.js'
 // categoryIds 가 없을 때 넘길 고정 빈 배열 (매번 [] 를 새로 만들면 ItemCard 의 memo 가 풀린다)
 const NO_CATEGORIES = []
 
+// 백업 복원 단계 수. 화면 문구가 이 값을 보고 적는다 — 단계를 늘리면서 '(3/4)' 같은
+// 문구를 손으로 고치지 않게 한다(고치는 것을 잊으면 4/4 뒤에 5단계가 더 돈다).
+const IMPORT_STEPS = 5
+
 export default function Archive({ session, onNavigate }) {
   const [items, setItems] = useState([])
   const [itemCats, setItemCats] = useState({}) // item_id -> [category_id]
@@ -32,13 +41,32 @@ export default function Archive({ session, onNavigate }) {
   const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(true)
 
-  const [categories, setCategories] = useState([])
+  /* ── 공간(서랍) ─────────────────────────────────────────────────────
+     🔴 '지금 어느 서랍을 보고 있나' 는 목록·카테고리·오늘·저장 모두가 같이 봐야 하는
+        값이라 이 자리에 둔다. 아래로 props 로 내려간다.
+     🔴 spaceReady 는 'items.space 열이 DB 에 있는가' 다. SQL 은 사람이 직접 실행하므로
+        그 전에도 앱은 돌아야 한다 — 열이 없으면 전환기를 접고 조회에 조건을 붙이지 않는다.
+        (없는 열로 거르면 목록 조회가 통째로 실패한다) */
+  const [space, setSpace] = useState(() => readSpacePref(session.user.id))
+  const [spaces, setSpaces] = useState(BUILTIN_SPACES)
+  const [spaceReady, setSpaceReady] = useState(null) // null=확인 중, false=열 없음
+  // 조회에 붙일 값. 열이 없으면 null 이고, 그때는 조건 자체를 붙이지 않는다.
+  const spaceFilter = spaceReady ? space : null
+
+  const [allCategories, setAllCategories] = useState([])
   const [slots, setSlots] = useState([])
+  /* 지금 공간의 카테고리만. 전체 목록(allCategories)도 함께 들고 있는 이유는,
+     항목 모달에서 **다른 공간으로 옮길 때** 그 공간의 카테고리를 보여 줘야 하기 때문이다.
+     카테고리는 많아야 수십 개라 통째로 들고 있어도 값이 싸다. */
+  const categories = useMemo(
+    () => (spaceFilter ? allCategories.filter((c) => spaceOf(c) === spaceFilter) : allCategories),
+    [allCategories, spaceFilter]
+  )
   const [managerOpen, setManagerOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [trashCount, setTrashCount] = useState(0)
   const [trashOpen, setTrashOpen] = useState(false)
-  const [importStep, setImportStep] = useState(null) // null | 1..4 (복원 단계)
+  const [importStep, setImportStep] = useState(null) // null | 1..IMPORT_STEPS (복원 단계)
   const fileRef = useRef(null)
 
   const [search, setSearch] = useState('')
@@ -157,13 +185,15 @@ export default function Archive({ session, onNavigate }) {
       .select('*', withCount ? { count: 'exact' } : undefined)
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
+    // 공간은 가장 바깥 조건이다 — 검색·태그·중요 어느 필터를 걸어도 다른 서랍은 보이지 않는다.
+    if (spaceFilter) q = q.eq('space', spaceFilter)
     if (allowedIds) q = q.in('id', allowedIds)
     if (activeTag) q = q.contains('tags', [activeTag])
     if (starredOnly) q = q.eq('starred', true)
     if (statusFilter) q = q.eq('status', statusFilter)
     if (debounced) q = q.or(`title.ilike.%${debounced}%,content.ilike.%${debounced}%`)
     return q
-  }, [activeTag, starredOnly, statusFilter, debounced])
+  }, [activeTag, starredOnly, statusFilter, debounced, spaceFilter])
 
   // 선택 카테고리 + 자손에 속한 item_id 목록. 필터가 없으면 null(=제한 없음).
   const resolveAllowedIds = useCallback(async () => {
@@ -231,13 +261,14 @@ export default function Archive({ session, onNavigate }) {
     setLoading(false)
   }, [buildQuery, resolveAllowedIds, loadItemCats, toast])
 
+  // 전 공간의 카테고리를 한 번에 받는다. 공간별로 가르는 것은 위 categories 메모다.
   const loadCategories = useCallback(async () => {
     const { data, error } = await supabase
       .from('categories')
       .select('*')
       .order('position', { ascending: true })
     if (error) toast.error('카테고리를 불러오지 못했어요')
-    else setCategories(data ?? [])
+    else setAllCategories(data ?? [])
   }, [toast])
 
   const loadSlots = useCallback(async () => {
@@ -251,10 +282,13 @@ export default function Archive({ session, onNavigate }) {
 
   const loadCounts = useCallback(async () => {
     try {
-      // item_categories 에는 deleted_at 이 없어 휴지통 항목이 섞인다.
-      // 살아있는 id 를 먼저 모아 걸러낸다.
+      // item_categories 에는 deleted_at 도 space 도 없다. 살아있는 id 를, 그것도
+      // 지금 공간의 것만 먼저 모아 걸러낸다 — 휴지통 항목도 다른 서랍의 소속도 셈에서 빠진다.
       const [liveIds, links] = [
-        await fetchAllRows('items', 'id', (q) => q.is('deleted_at', null)),
+        await fetchAllRows('items', 'id', (q) => {
+          const base = q.is('deleted_at', null)
+          return spaceFilter ? base.eq('space', spaceFilter) : base
+        }),
         await fetchAllRows('item_categories', 'item_id, category_id')
       ]
       const live = new Set(liveIds.map((r) => r.id))
@@ -269,21 +303,44 @@ export default function Archive({ session, onNavigate }) {
       toast.error('카테고리별 개수를 세지 못했어요')
     }
 
-    const { count: tc } = await supabase
+    let todoQ = supabase
       .from('items').select('id', { count: 'exact', head: true })
       .eq('status', 'todo').is('deleted_at', null)
+    if (spaceFilter) todoQ = todoQ.eq('space', spaceFilter)
+    const { count: tc } = await todoQ
     setTodoCount(tc ?? 0)
 
+    // 🔴 휴지통만 공간을 가리지 않는다 (요구사항 5). 지운 것을 찾으러 가는 자리에서
+    //    서랍까지 맞춰 놓아야 보인다면, 어느 서랍에서 지웠는지 기억해야 한다는 뜻이 된다.
+    //    대신 목록에서 각 줄에 어느 공간의 것인지 적어 준다.
     const { count: trash } = await supabase
       .from('items').select('id', { count: 'exact', head: true })
       .not('deleted_at', 'is', null)
     setTrashCount(trash ?? 0)
-  }, [categories, toast])
+  }, [categories, toast, spaceFilter])
+
+  // 공간 열이 있는지 한 번 물어보고, 있으면 목록을 받는다.
+  // 🔴 열이 없는 동안에는 space 조건을 어디에도 붙이지 않는다 — 그래야 예전 그대로 돈다.
+  const loadSpaceList = useCallback(async () => {
+    const ok = await probeSpaceColumn()
+    setSpaceReady(ok)
+    if (!ok) return
+    const { spaces: rows } = await loadSpaces(userId)
+    setSpaces(rows)
+    // 기억해 둔 공간이 사라졌으면(이름만 바꾼 게 아니라 목록에 없으면) 첫 공간으로 돌아간다
+    setSpace((cur) => (rows.some((s) => s.key === cur) ? cur : (rows[0]?.key ?? DEFAULT_SPACE)))
+  }, [userId])
+
+  useEffect(() => { loadSpaceList() }, [loadSpaceList])
+  useEffect(() => { writeSpacePref(userId, space) }, [userId, space])
 
   useEffect(() => { loadCategories() }, [loadCategories])
   useEffect(() => { loadSlots() }, [loadSlots])
-  useEffect(() => { loadPage(0) }, [loadPage])
-  useEffect(() => { loadCounts() }, [loadCounts])
+  /* 🔴 공간 열이 있는지 알기 전에는 목록을 부르지 않는다. 먼저 불러 버리면 그 한 번은
+     조건 없는 조회라, 전 공간의 항목이 잠깐 스쳐 지나간다 — 서랍을 나눠 놓고
+     '방금 저쪽 것이 보였는데' 를 남기면 나눈 의미가 없다. 그동안은 스켈레톤이 뜬다. */
+  useEffect(() => { if (spaceReady !== null) loadPage(0) }, [loadPage, spaceReady])
+  useEffect(() => { if (spaceReady !== null) loadCounts() }, [loadCounts, spaceReady])
 
   const refresh = useCallback(() => {
     loadPage(0)
@@ -349,8 +406,28 @@ export default function Archive({ session, onNavigate }) {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [refresh])
 
+  /* 서랍 바꾸기. 필터를 함께 지운다 — 카테고리도 태그도 그 공간의 것이라,
+     들고 넘어가면 '조건에 맞는 항목이 없어요' 만 뜨고 왜 비었는지는 알 수 없다. */
+  const switchSpace = useCallback((key) => {
+    if (key === space) return
+    setCategoryId(null)
+    setActiveTag(null)
+    setSearch('')
+    setDebounced('')   // 디바운스가 300ms 뒤에 옛 검색어를 되살리지 않도록 같이 지운다
+    setStarredOnly(false)
+    setStatusFilter(null)
+    firstSeen.current = new Map() // 새 서랍의 카드는 처음 보는 것이다
+    setSpace(key)
+  }, [space])
+
   const openItem = useCallback((item) => setModalItem(item), [])
   const toggleTag = useCallback((t) => setActiveTag((prev) => (prev === t ? null : t)), [])
+
+  /* 저장할 때 붙일 공간. 열이 없는 DB 에서는 **아무것도 붙이지 않는다** —
+     없는 열을 보내면 저장 자체가 PGRST204 로 튕긴다. */
+  function spaceField() {
+    return spaceFilter ? { space: spaceFilter } : {}
+  }
 
   async function quickSave(e) {
     e.preventDefault()
@@ -369,6 +446,7 @@ export default function Archive({ session, onNavigate }) {
       category_id: null,
       tags: [],
       status: isTodo ? 'todo' : 'none',
+      ...spaceField(),
       user_id: session.user.id
     })
     setQuickBusy(false)
@@ -425,6 +503,7 @@ export default function Archive({ session, onNavigate }) {
       tags: [],
       status: isTodo ? 'todo' : 'none',
       image_url: joinImages(urls),
+      ...spaceField(),
       user_id: session.user.id
     })
     if (error) {
@@ -453,6 +532,15 @@ export default function Archive({ session, onNavigate }) {
         await fetchAllRows('time_slots'),
         await fetchAllRows('item_categories')
       ]
+      /* 공간 이름·아이콘도 함께 담는다. 항목의 space 열은 **열쇠**만 들고 있어서,
+         이 표가 빠지면 복원한 뒤 '수업' 이 'class' 라는 이름 없는 서랍이 된다.
+         (이 저장소는 예전에 time_slots 를 백업에서 빠뜨린 적이 있다 — bf13b2b) */
+      let allSpaces = []
+      try {
+        allSpaces = await fetchAllRows('spaces')
+      } catch (err) {
+        console.warn('[백업] 공간 목록을 읽지 못했습니다(표가 아직 없을 수 있음):', err)
+      }
 
       const payload = {
         exported_at: new Date().toISOString(),
@@ -468,6 +556,7 @@ export default function Archive({ session, onNavigate }) {
         )),
         categories: allCategories,
         time_slots: allSlots,
+        spaces: allSpaces,
         item_categories: allLinks
       }
 
@@ -535,12 +624,14 @@ export default function Archive({ session, onNavigate }) {
       return
     }
 
-    // time_slots 는 나중에 추가된 항목이라 옛 백업에는 없다. 없으면 그냥 건너뛴다.
+    // time_slots·spaces 는 나중에 추가된 항목이라 옛 백업에는 없다. 없으면 그냥 건너뛴다.
     const backupSlots = Array.isArray(backup.time_slots) ? backup.time_slots : []
+    const backupSpaces = Array.isArray(backup.spaces) ? backup.spaces : []
 
     const proceed = window.confirm(
       `백업의 항목 ${backup.items.length}개, 카테고리 ${backup.categories.length}개`
       + (backupSlots.length > 0 ? `, 시간대 ${backupSlots.length}개` : '')
+      + (backupSpaces.length > 0 ? `, 공간 ${backupSpaces.length}개` : '')
       + '를 가져올까요? '
       + '기존 데이터는 삭제되지 않고, 같은 id의 데이터는 백업 내용으로 덮어써집니다.'
     )
@@ -560,12 +651,29 @@ export default function Archive({ session, onNavigate }) {
       setImportStep(2)
       await upsertChunked('time_slots', backupSlots.map((s) => ({ ...s, user_id: uid })))
 
-      stage = '항목'
+      /* 공간은 **깨져도 복원을 멈추지 않는다.** 표가 아직 없는 DB 에서도 나머지는
+         들어가야 한다 — 여기서 던지면 항목이 통째로 복원되지 않는다.
+         공간 이름이 없으면 서랍이 열쇠 이름으로 보일 뿐, 자료는 그대로다. */
+      stage = '공간'
       setImportStep(3)
+      if (backupSpaces.length > 0) {
+        try {
+          await upsertChunked(
+            'spaces',
+            backupSpaces.map((s) => ({ ...s, user_id: uid })),
+            'user_id,key'
+          )
+        } catch (err) {
+          console.warn('[복원] 공간을 넣지 못했습니다(표가 아직 없을 수 있음):', err)
+        }
+      }
+
+      stage = '항목'
+      setImportStep(4)
       await upsertChunked('items', backup.items.map((i) => ({ ...i, user_id: uid })))
 
       stage = '카테고리 소속'
-      setImportStep(4)
+      setImportStep(5)
       await upsertChunked(
         'item_categories',
         backup.item_categories.map((r) => ({
@@ -580,6 +688,7 @@ export default function Archive({ session, onNavigate }) {
       toast.success(`복원 완료: 항목 ${backup.items.length}개`)
       loadCategories()
       loadSlots() // 복원된 시간대를 '오늘' 탭이 바로 쓰도록
+      loadSpaceList() // 복원된 공간 이름·아이콘을 전환기가 바로 쓰도록
       refresh()
     } catch (err) {
       console.error(err)
@@ -600,6 +709,8 @@ export default function Archive({ session, onNavigate }) {
       color: parent?.color ?? 'gray',
       parent_id: parentId ?? null,
       position,
+      // 새 카테고리는 지금 보고 있는 서랍에 생긴다 (마인드맵의 + 버튼)
+      ...spaceField(),
       user_id: session.user.id
     })
     if (error) toast.error('카테고리를 추가하지 못했어요')
@@ -630,6 +741,17 @@ export default function Archive({ session, onNavigate }) {
           <span className="brand-mark" aria-hidden="true">A</span>
           <span className="brand-name">나의 아카이브</span>
         </button>
+
+        {/* 공간 전환기. 열이 없는 DB 에서는 통째로 숨는다 (spaceReady 참고) */}
+        {spaceReady && (
+          <SpaceSwitcher
+            spaces={spaces}
+            current={space}
+            onSelect={switchSpace}
+            onManage={() => setSettingsOpen(true)}
+          />
+        )}
+
         <div className="topbar-actions" ref={menuRef}>
           <button className="btn-primary" onClick={() => setModalItem(null)}>+ 새 항목</button>
           {/* PIN 을 건 기기에서만 보인다. PIN 이 없으면 잠가도 풀 길이 없다. */}
@@ -665,7 +787,7 @@ export default function Archive({ session, onNavigate }) {
               onClick={() => { fileRef.current?.click(); setMenuOpen(false) }}
               disabled={exporting || importStep !== null}
               title="백업 JSON을 불러와 합칩니다 (기존 데이터는 삭제되지 않음)"
-            >{importStep !== null ? `복원 중... (${importStep}/4)` : '📥 가져오기'}</button>
+            >{importStep !== null ? `복원 중... (${importStep}/${IMPORT_STEPS})` : '📥 가져오기'}</button>
             <button
               className="btn-ghost"
               onClick={async () => {
@@ -684,6 +806,12 @@ export default function Archive({ session, onNavigate }) {
           />
         </div>
       </header>
+
+      {/* SQL 을 아직 실행하지 않은 상태. 조용히 접지 않고 한 줄로 알린다 —
+          말을 안 하면 "공간 기능이 안 만들어졌나" 로 읽힌다. */}
+      {spaceReady === false && (
+        <p className="space-note" role="status">{SPACE_COLUMN_MESSAGE}</p>
+      )}
 
       <div className="tabs" role="tablist" aria-label="화면 전환">
         <button
@@ -765,11 +893,13 @@ export default function Archive({ session, onNavigate }) {
           : '!로 시작하면 ‘할 것’으로 저장돼요 · 이미지는 붙여넣기(Ctrl+V)로 바로 저장'}
       </p>
 
-      {tab === 'today' && (
+      {/* 목록과 같은 이유로, 어느 서랍인지 알기 전에는 '오늘' 도 그리지 않는다 */}
+      {tab === 'today' && spaceReady !== null && (
         <Today
           categories={categories}
           slots={slots}
           userId={session.user.id}
+          space={spaceFilter}
           refreshKey={refreshKey}
           onOpen={(item) => setModalItem(item)}
           onChanged={refresh}
@@ -916,6 +1046,7 @@ export default function Archive({ session, onNavigate }) {
 
       {trashOpen && (
         <Trash
+          spaces={spaceReady ? spaces : null}
           onClose={() => setTrashOpen(false)}
           onChanged={refresh}
         />
@@ -924,8 +1055,10 @@ export default function Archive({ session, onNavigate }) {
       {modalItem !== undefined && (
         <ItemModal
           item={modalItem}
-          categories={categories}
+          categories={allCategories}
           slots={slots}
+          spaces={spaceReady ? spaces : null}
+          space={spaceFilter}
           userId={session.user.id}
           onClose={() => setModalItem(undefined)}
           onSaved={(warn, savedItemId) => {
@@ -950,7 +1083,7 @@ export default function Archive({ session, onNavigate }) {
       {(exporting || importStep !== null) && (
         <div className="busy-pill" role="status">
           <span className="busy-dot" aria-hidden="true" />
-          {exporting ? '백업을 만드는 중...' : `복원 중 (${importStep}/4)`}
+          {exporting ? '백업을 만드는 중...' : `복원 중 (${importStep}/${IMPORT_STEPS})`}
         </div>
       )}
 
@@ -960,6 +1093,9 @@ export default function Archive({ session, onNavigate }) {
           userId={userId}
           themePref={themePref}
           onThemeChange={setThemePref}
+          spaces={spaceReady ? spaces : null}
+          space={spaceFilter}
+          onSpacesChanged={loadSpaceList}
           onOpenPricing={() => { setSettingsOpen(false); onNavigate('/pricing') }}
           onLockChanged={syncLockCfg}
           onClose={() => setSettingsOpen(false)}
@@ -970,6 +1106,8 @@ export default function Archive({ session, onNavigate }) {
         <CategoryManager
           categories={categories}
           userId={session.user.id}
+          space={spaceFilter}
+          spaceName={findSpace(spaces, space)?.name ?? null}
           onClose={() => setManagerOpen(false)}
           onChanged={() => { loadCategories(); refresh() }}
         />

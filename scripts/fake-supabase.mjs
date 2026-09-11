@@ -10,6 +10,9 @@ export const store = {
   rows: {},
   // 다음 items insert/update 를 'files 열이 없다' 로 실패시킨다 (setup.sql 미실행 흉내)
   missingFilesColumn: false,
+  // 같은 요령으로 'space 열이 없다' 를 흉내 낸다. 공간 SQL 을 아직 실행하지 않은
+  // DB 에서도 목록·저장이 예전 그대로 도는지 보려면 이쪽도 실패해야 한다.
+  missingSpaceColumn: false,
   // items 에 쓰려고 하면 이 오류를 돌려준다. 로그인이 풀린 상태(RLS 거부)나
   // NUL 거부(22P05)처럼 '저장 자체가 튕기는' 경우를 흉내 낼 때 쓴다.
   // 오류 객체를 그대로 두면 모든 쓰기가 실패하고, 함수를 두면 (행) => 오류|null 로
@@ -24,18 +27,23 @@ export const store = {
   anon: false,
   // 서버 시각. share_view 의 만료 판정은 이 값으로 한다 (받는 사람 시계가 아니다).
   now: () => Date.now(),
-  calls: { upload: [], remove: [], signed: [], rpc: [], list: [] }
+  // 나간 조회를 그대로 적어 둔다. '화면에서 걸렀나, 조회에서 걸렀나' 는 눈으로는
+  // 구분되지 않는다 — 공간 점검이 이 기록을 보고 판정한다.
+  calls: { upload: [], remove: [], signed: [], rpc: [], list: [], query: [] }
 }
 
 export function resetStore() {
   store.buckets = { 'archive-images': new Map(), 'archive-files': new Map() }
-  store.rows = { items: [], item_categories: [], categories: [], time_slots: [], shares: [] }
+  store.rows = {
+    items: [], item_categories: [], categories: [], time_slots: [], shares: [], spaces: []
+  }
   store.missingFilesColumn = false
+  store.missingSpaceColumn = false
   store.itemsError = null
   store.uploadGuard = null
   store.anon = false
   store.now = () => Date.now()
-  store.calls = { upload: [], remove: [], signed: [], rpc: [], list: [] }
+  store.calls = { upload: [], remove: [], signed: [], rpc: [], list: [], query: [] }
   store.listError = null
 }
 resetStore()
@@ -101,6 +109,17 @@ const MISSING_FILES = {
   message: "Could not find the 'files' column of 'items' in the schema cache"
 }
 
+const MISSING_SPACE = {
+  code: '42703',
+  message: 'column items.space does not exist'
+}
+
+// 공간 SQL 을 실행하지 않은 DB 에서는 spaces 표도 없다.
+const MISSING_SPACES_TABLE = {
+  code: 'PGRST205',
+  message: "Could not find the table 'public.spaces' in the schema cache"
+}
+
 // setup.sql 의 default 중, 앱이 보내지 않아 DB 가 채우는 값들.
 const COLUMN_DEFAULTS = {
   shares: { revoked: false, files: [] }
@@ -131,12 +150,21 @@ function matches(row, filters) {
 
 function makeQuery(table) {
   const q = {
-    _op: null, _payload: null, _filters: [], _single: false,
+    _op: null, _payload: null, _filters: [], _single: false, _cols: '*', _count: null, _head: false,
     insert(rows) { q._op = 'insert'; q._payload = rows; return q },
     update(row) { q._op = 'update'; q._payload = row; return q },
     upsert(rows) { q._op = 'insert'; q._payload = rows; return q },
     delete() { q._op = 'delete'; return q },
-    select() { q._op ??= 'select'; return q },
+    /* 고른 열 이름을 기억해 둔다 — '없는 열을 골랐다' 를 흉내 내려면 이것이 있어야 한다.
+       두 번째 인자는 PostgREST 의 { count, head } 다. 개수만 세는 조회(head)는 목록
+       상단의 '전체 N개' 와 할 것·휴지통 배지가 쓴다 — 세어서 돌려줘야 그 숫자를 잴 수 있다. */
+    select(cols, opts) {
+      q._op ??= 'select'
+      q._cols = cols ?? '*'
+      q._count = opts?.count ?? null
+      q._head = !!opts?.head
+      return q
+    },
     eq(col, val) { q._filters.push(['eq', col, val]); return q },
     not(col, op, val) { q._filters.push(['not', col, op, val]); return q },
     is(col, val) { q._filters.push(['is', col, val]); return q },
@@ -161,8 +189,31 @@ const RLS_DENIED = {
   message: 'new row violates row-level security policy'
 }
 
+// 'space 열이 없다' 를 실제 PostgREST 와 같은 모양으로 흉내 낸다.
+//   · 그 열을 고르거나 조건으로 쓰면 조회가 실패한다 (42703)
+//   · 그 열을 담아 쓰면 저장이 실패한다 (PGRST204)
+//   · spaces 표 자체가 없다 (PGRST205)
+function missingSpaceError(table, q) {
+  if (!store.missingSpaceColumn) return null
+  if (table === 'spaces') return MISSING_SPACES_TABLE
+  if (table !== 'items' && table !== 'categories') return null
+
+  if (q._op === 'insert' || q._op === 'update') {
+    const list = Array.isArray(q._payload) ? q._payload : [q._payload]
+    return list.some((r) => r && 'space' in r) ? MISSING_SPACE : null
+  }
+  if (q._filters.some(([kind, col]) => kind === 'eq' && col === 'space')) return MISSING_SPACE
+  return /(^|[\s,])space([\s,]|$)/.test(String(q._cols ?? '')) ? MISSING_SPACE : null
+}
+
 function run(table, q) {
   const rows = (store.rows[table] ??= [])
+  store.calls.query.push({
+    table, op: q._op ?? 'select', cols: q._cols, filters: q._filters.map((f) => [...f])
+  })
+
+  const spaceErr = missingSpaceError(table, q)
+  if (spaceErr) return { data: null, error: spaceErr }
 
   // 비로그인 상태. 실제 RLS 와 같은 모양으로 답한다 — 조회는 '오류 없이 0행',
   // 쓰기는 42501. 토큰을 알아도 shares 에서 한 줄도 못 읽는 것이 요점이다.
@@ -219,7 +270,8 @@ function run(table, q) {
     return { data: null, error: MISSING_FILES }
   }
   const found = rows.filter((r) => matches(r, q._filters))
-  return { data: q._single ? (found[0] ?? null) : found, error: null }
+  const count = q._count ? found.length : null
+  return { data: q._head ? null : (q._single ? (found[0] ?? null) : found), count, error: null }
 }
 
 // supabase/setup.sql 의 share_view(p_token) 를 그대로 옮긴 것.

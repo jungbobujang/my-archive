@@ -139,6 +139,59 @@ grant execute on function public.share_view(uuid) to anon, authenticated;
 
 ---
 
+### 🔴 공간 / 서랍 (space) — **실행 필요**
+
+`supabase/setup.sql` 전체를 SQL Editor 에 다시 붙여넣고 Run 하세요 (2-b 절이 새로 생겼고,
+1·3·8 절이 조금 늘었습니다). 여러 번 실행해도 안전합니다.
+
+```sql
+-- ① 공간 표. 항목이 들고 다니는 것은 '열쇠' 문자열 하나뿐이고, 이 표는 이름·아이콘만 담는다.
+create table if not exists public.spaces (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  key text not null,
+  name text not null,
+  icon text default '🗂',
+  position int default 0,
+  created_at timestamptz default now(),
+  primary key (user_id, key)
+);
+create index if not exists spaces_user_pos_idx on public.spaces (user_id, position);
+alter table public.spaces enable row level security;
+drop policy if exists "own spaces all" on public.spaces;
+create policy "own spaces all" on public.spaces
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- ② 항목·카테고리에 space 열.
+--    🔴 **이 기본값이 곧 마이그레이션이다** — 열이 생기는 순간 기존 행은 전부 '개인'이 된다.
+--       따로 돌릴 update 문이 없다. 되돌리려면 열을 지우면 된다(자료는 그대로다).
+alter table public.items      add column if not exists space text not null default 'personal';
+alter table public.categories add column if not exists space text not null default 'personal';
+
+create index if not exists items_user_space_created_idx
+  on public.items (user_id, space, created_at desc) where deleted_at is null;
+create index if not exists categories_user_space_idx
+  on public.categories (user_id, space, position);
+
+-- ③ 기본 공간 2종 시드. seed_defaults() 안에 들어가 있어 새 계정에는 가입 트리거가,
+--    기존 계정에는 setup.sql 끝의 do 블록이 넣어 준다. 이미 있으면 건너뛴다.
+insert into public.spaces (user_id, key, name, icon, position)
+select u.id, v.key, v.name, v.icon, v.position
+from auth.users u
+cross join (values ('personal', '개인', '🏠', 1), ('class', '수업', '🏫', 2))
+          as v(key, name, icon, position)
+where not exists (select 1 from public.spaces s where s.user_id = u.id);
+```
+
+**실행 전에는** 공간 기능만 접힙니다. 헤더의 전환기가 숨고 화면에
+`공간 기능을 쓰려면 supabase/setup.sql 을 실행해 주세요` 한 줄이 뜨며,
+목록·검색·저장·휴지통은 **예전 그대로** 돕니다 (앱이 `items.space` 가 있는지 한 번 물어보고
+없으면 조회에도 저장에도 그 열을 쓰지 않습니다 — `src/spaces.js` 의 `probeSpaceColumn`).
+
+되돌리기: `alter table public.items drop column if exists space;` (카테고리도 같게).
+열만 사라지고 항목·카테고리는 그대로 남습니다.
+
+---
+
 ### 그 밖
 
 **없습니다.**
