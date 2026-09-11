@@ -269,10 +269,20 @@ create policy "archive images delete" on storage.objects
 --    createSignedUrl 로 짧은 주소를 만들어 쓴다(src/supabase.js signedFileUrl).
 --    경로는 {항목id}/{타임스탬프}_{원본명} 이라 사용자 id 가 들어가지 않는다.
 --    그래서 소유자(owner) 기준으로 막는다.
+--
+--    🔴 file_size_limit 은 src/supabase.js 의 FILE_MAX_BYTES 와 **같은 값**이어야 한다
+--       (25MB = 26214400). 브라우저 검사와 서버 검사가 어긋나면, 앱이 통과시킨 파일이
+--       업로드에서 말없이 튕긴다 — 사람은 왜 안 되는지 알 길이 없다.
+--    🔴 on conflict do nothing 이라 **이미 만들어진 버킷에는 이 값이 적용되지 않는다.**
+--       상한을 올릴 때는 아래 update 를 따로 실행해야 한다(TODO-SQL.md 에도 적어 두었다).
 -- ============================================================
 insert into storage.buckets (id, name, public, file_size_limit)
-values ('archive-files', 'archive-files', false, 10485760)
+values ('archive-files', 'archive-files', false, 26214400)
 on conflict (id) do nothing;
+
+-- 이미 있는 버킷의 상한 따라잡기. 새 프로젝트에서는 위 insert 로 이미 맞다.
+update storage.buckets set file_size_limit = 26214400
+where id = 'archive-files' and file_size_limit is distinct from 26214400;
 
 drop policy if exists "archive files read" on storage.objects;
 create policy "archive files read" on storage.objects

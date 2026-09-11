@@ -12,7 +12,7 @@ import {
   supabase, extractUrls, parseLinks, parseTags, youtubeThumb, ymd, fetchLinkTitle,
   parseImages, joinImages, uploadImage, imageFilesFromPaste, MAX_IMAGES,
   parseFiles, joinFiles, uploadFile, signedFileUrl, downloadAsBlob, fileRejectReason, fileIcon, formatBytes,
-  removeStorageFiles, removeStorageImages, splitByKind, MAX_FILES,
+  removeStorageFiles, removeStorageImages, splitByKind, MAX_FILES, FILE_MAX_LABEL,
   treeOrder, categoryPath,
   stripInvisibleAll, saveErrorMessage, byteLength, DRAFT_DEBOUNCE_MS, DRAFT_MAX_BYTES
 } from '../supabase.js'
@@ -1316,7 +1316,8 @@ export default function ItemModal({ item, categories, slots, spaces, space, user
                 disabled={files.length >= MAX_FILES}
               >📎 파일 첨부</button>
               <p className="img-hint">
-                끌어놓기로도 올릴 수 있어요 · 최대 {MAX_FILES}개 · 개당 10MB
+                {/* 🔴 상한은 상수에서 온다 — 화면에 손으로 적으면 올리는 날 안내만 옛말이 된다 */}
+                끌어놓기로도 올릴 수 있어요 · 최대 {MAX_FILES}개 · 개당 {FILE_MAX_LABEL}
               </p>
             </div>
           </div>

@@ -127,7 +127,15 @@ export async function uploadImage(file, userId) {
 // 지금 코드 그대로 돌아간다(열 하나가 늘 뿐이다).
 export const FILE_BUCKET = 'archive-files'
 export const MAX_FILES = 5
-export const FILE_MAX_BYTES = 10 * 1024 * 1024
+// 파일 한 개의 상한. 🔴 **버킷의 file_size_limit 과 같은 값이어야 한다**
+//    (supabase/setup.sql 의 '6) 파일 스토리지'). 브라우저 검사와 서버 검사가 어긋나면,
+//    여기서 통과시킨 파일이 업로드에서 말없이 튕긴다(사람은 왜 안 되는지 알 수 없다).
+//    바꿀 때는 이 상수와 setup.sql 을 **함께** 고쳐야 한다.
+export const FILE_MAX_BYTES = 25 * 1024 * 1024
+// 화면에 적는 상한 문구. 🔴 숫자를 화면에 손으로 적지 않는다 — 상한을 올리는 날
+//    상수만 고치고 문구를 그대로 두면, 안내와 실제 판정이 서로 다른 말을 하게 된다
+//    (저장소 게이지의 STORAGE_QUOTA_LABEL 과 같은 규칙이다).
+export const FILE_MAX_LABEL = `${Math.round(FILE_MAX_BYTES / 1024 / 1024)}MB`
 
 // 확장자 정책은 **허용 목록이 아니라 차단 목록**이다.
 //
@@ -192,7 +200,7 @@ export function formatBytes(n) {
 }
 
 // 붙일 수 있는 파일인지. 붙일 수 없으면 그 이유를 문장으로 돌려준다(없으면 null).
-// 차단 확장자를 먼저 본다 — 100MB 짜리 exe 에 "10MB 이하만" 이라고 답하면 엉뚱한 안내가 된다.
+// 차단 확장자를 먼저 본다 — 100MB 짜리 exe 에 "25MB 이하만" 이라고 답하면 엉뚱한 안내가 된다.
 // 여러 개를 한꺼번에 떨어뜨렸을 때 어느 것이 걸렸는지 알 수 있게 확장자를 괄호로 덧붙인다.
 export function fileRejectReason(file, currentCount = 0) {
   const name = file?.name ?? ''
@@ -200,7 +208,7 @@ export function fileRejectReason(file, currentCount = 0) {
     return `${BLOCKED_FILE_MESSAGE} (.${extOfName(name)})`
   }
   if ((file?.size ?? 0) > FILE_MAX_BYTES) {
-    return `10MB 이하만 첨부할 수 있습니다 (현재 ${formatBytes(file.size)})`
+    return `${FILE_MAX_LABEL} 이하만 첨부할 수 있습니다 (현재 ${formatBytes(file.size)})`
   }
   if (currentCount >= MAX_FILES) return `파일은 최대 ${MAX_FILES}개까지예요`
   return null

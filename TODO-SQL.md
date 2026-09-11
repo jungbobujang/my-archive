@@ -83,7 +83,8 @@ from storage.buckets
 where id in ('archive-files', 'archive-images');
 
 -- ② 위에서 allowed_mime_types 가 null 이 아닐 때만 실행 — MIME 제한 해제
---    (file_size_limit 10485760 은 그대로 둡니다. 용량 상한은 두 겹으로 유지)
+--    (file_size_limit 은 그대로 둡니다. 용량 상한은 두 겹으로 유지 —
+--     지금 값은 26214400 이어야 합니다. 아래 '개당 상한 10MB → 25MB' 절 참고)
 update storage.buckets
 set allowed_mime_types = null
 where id = 'archive-files';
@@ -189,6 +190,35 @@ where not exists (select 1 from public.spaces s where s.user_id = u.id);
 
 되돌리기: `alter table public.items drop column if exists space;` (카테고리도 같게).
 열만 사라지고 항목·카테고리는 그대로 남습니다.
+
+---
+
+### 🔴 첨부 파일 개당 상한 10MB → 25MB — **실행 필요**
+
+앱은 이제 개당 **25MB** 까지 받습니다(`src/supabase.js` 의 `FILE_MAX_BYTES = 26214400`).
+그런데 `archive-files` 버킷의 `file_size_limit` 은 **10MB(10485760) 로 만들어져 있습니다.**
+
+`supabase/setup.sql` 의 버킷 생성문은 `on conflict (id) do nothing` 이라
+**이미 있는 버킷에는 새 값이 적용되지 않습니다.** 그래서 update 한 줄이 따로 필요합니다
+(setup.sql 6절에도 같은 문장을 넣어 두었으니 전체를 다시 Run 해도 됩니다).
+
+```sql
+-- ① 지금 값 확인 (10485760 이면 아래 ②가 필요합니다)
+select id, public, file_size_limit, allowed_mime_types
+from storage.buckets where id = 'archive-files';
+
+-- ② 25MB 로 올리기
+update storage.buckets
+set file_size_limit = 26214400          -- 25 * 1024 * 1024
+where id = 'archive-files';
+```
+
+**실행 전에는** 10MB 를 넘는 파일이 브라우저 검사는 통과하고 **업로드에서 튕깁니다.**
+앱은 `파일 N개를 올리지 못했어요 — …` 로 알리지만, 그 원인이 서버 상한이라는 것까지는
+말해 주지 못합니다. 즉 **두 검사가 어긋난 동안이 가장 나쁜 상태**이므로 함께 올려야 합니다.
+
+되돌리기: 위 update 의 값을 `10485760` 으로 두고, `FILE_MAX_BYTES` 도 같이 되돌리세요.
+**한쪽만 되돌리면 안 됩니다** — 어긋난 상태가 곧 위의 그 나쁜 상태입니다.
 
 ---
 

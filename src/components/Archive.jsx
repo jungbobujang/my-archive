@@ -544,8 +544,8 @@ export default function Archive({ session, onNavigate }) {
 
       const payload = {
         exported_at: new Date().toISOString(),
-        // 첨부 파일은 '메타만' 들어간다. 파일 실체를 JSON 에 담으면(base64) 10MB 짜리
-        // 다섯 개만 있어도 백업이 수십 MB 로 부풀어 브라우저에서 만들다 멈춘다.
+        // 첨부 파일은 '메타만' 들어간다. 파일 실체를 JSON 에 담으면(base64) 25MB 짜리
+        // 다섯 개만 있어도 백업이 수백 MB 로 부풀어 브라우저에서 만들다 멈춘다.
         // 읽는 사람이 그 사실을 알 수 있도록 파일 안에도 한 줄 적어 둔다.
         files_note: '첨부 파일의 실체는 이 백업에 들어 있지 않습니다. '
           + 'items[].files 는 이름(name)·경로(path)·용량(size) 만 담고, '

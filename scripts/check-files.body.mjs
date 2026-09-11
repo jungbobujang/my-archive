@@ -3,7 +3,7 @@ import { JSDOM, VirtualConsole } from 'jsdom'
 import {
   fileRejectReason, storageKeyFor, originalNameFromKey, parseFiles, joinFiles,
   formatBytes, fileIcon, filePathsOf, totalFileBytes, splitByKind,
-  imagePathFromUrl, parseImages, MAX_FILES, FILE_MAX_BYTES,
+  imagePathFromUrl, parseImages, MAX_FILES, FILE_MAX_BYTES, FILE_MAX_LABEL,
   BLOCKED_EXTS, BLOCKED_FILE_MESSAGE, isBlockedFileName, randomKeyToken, safeExtOf,
   stripInvisible, saveErrorMessage, byteLength, totalImageBytes,
   STORAGE_QUOTA_BYTES, STORAGE_QUOTA_LABEL,
@@ -103,20 +103,38 @@ const realFile = (name, bytes = 8, type = 'application/octet-stream') =>
     BLOCKED_EXTS.join(',') === 'exe,msi,bat,cmd,scr,com,pif,vbs,js,jar,apk', BLOCKED_EXTS.join(','))
 }
 
-// ── 2. 10MB 상한 ────────────────────────────────────────────
+// ── 2. 개당 용량 상한 ───────────────────────────────────────
+//   🔴 숫자를 손으로 적지 않는다. 상한을 올리는 날 상수만 고치고 점검이 옛 숫자를
+//      들고 있으면, 통과해야 할 파일에 대고 점검이 실패를 외친다(실제로 10→25MB 에서 그랬다).
+//      경계는 상수에서 세고, 문구도 FILE_MAX_LABEL 에서 만든다.
 {
+  const MB = 1024 * 1024
+  check('상한 상수가 25MB 다', FILE_MAX_BYTES === 25 * MB, FILE_MAX_BYTES)
+  check('상한 문구가 상수에서 나온다', FILE_MAX_LABEL === '25MB', FILE_MAX_LABEL)
+
   const under = fileRejectReason(mk('딱맞음.pdf', FILE_MAX_BYTES))
-  check('10MB 정확히는 통과', under === null, under)
+  check('상한에 정확히 맞으면 통과', under === null, under)
   const over = fileRejectReason(mk('큰파일.pdf', FILE_MAX_BYTES + 1))
-  check('10MB + 1바이트는 거부', over !== null, over)
-  const big = fileRejectReason(mk('큰파일.pdf', Math.round(12.3 * 1024 * 1024)))
-  check('거부 문구에 현재 용량', big === '10MB 이하만 첨부할 수 있습니다 (현재 12.3MB)', big)
-  // 차단 확장자를 용량보다 먼저 본다 — 100MB 짜리 exe 에 "10MB 이하만" 은 엉뚱한 안내다
-  const exeBig = fileRejectReason(mk('설치.exe', 100 * 1024 * 1024))
+  check('상한 + 1바이트는 거부', over !== null, over)
+
+  // 올린 상한을 사이에 두고 앞뒤로 하나씩 — 24MB 는 통과, 26MB 는 거부
+  check('24MB 는 통과', fileRejectReason(mk('발표자료.pdf', 24 * MB)) === null,
+    fileRejectReason(mk('발표자료.pdf', 24 * MB)))
+  const over26 = fileRejectReason(mk('영상.mp4', 26 * MB))
+  check('26MB 는 거부', over26 === `${FILE_MAX_LABEL} 이하만 첨부할 수 있습니다 (현재 26.0MB)`, over26)
+  // 옛 상한(10MB)을 넘던 크기는 이제 붙는다 — 올린 것이 실제로 올라갔는지 보는 자리다
+  check('예전에 막히던 12.3MB 가 이제 통과',
+    fileRejectReason(mk('예전에막히던.pdf', Math.round(12.3 * MB))) === null)
+
+  const big = fileRejectReason(mk('큰파일.pdf', Math.round(30.5 * MB)))
+  check('거부 문구에 현재 용량',
+    big === `${FILE_MAX_LABEL} 이하만 첨부할 수 있습니다 (현재 30.5MB)`, big)
+  // 차단 확장자를 용량보다 먼저 본다 — 100MB 짜리 exe 에 "25MB 이하만" 은 엉뚱한 안내다
+  const exeBig = fileRejectReason(mk('설치.exe', 100 * MB))
   check('큰 exe 는 용량이 아니라 확장자로 거부', exeBig.startsWith(BLOCKED_FILE_MESSAGE), exeBig)
   // 확장자 없는 큰 파일은 용량으로 거부된다(확장자로 거부될 이유가 없다)
   const noExtBig = fileRejectReason(mk('DUMP', FILE_MAX_BYTES + 1))
-  check('확장자 없는 큰 파일은 용량으로 거부', noExtBig.includes('10MB 이하만'), noExtBig)
+  check('확장자 없는 큰 파일은 용량으로 거부', noExtBig.includes(`${FILE_MAX_LABEL} 이하만`), noExtBig)
 }
 
 // ── 3. 항목당 5개 ───────────────────────────────────────────
