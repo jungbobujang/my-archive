@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client'
 import ItemModal from '../../src/components/ItemModal.jsx'
 import LockScreen from '../../src/components/LockScreen.jsx'
 import ItemCard from '../../src/components/ItemCard.jsx'
+import SpaceSwitcher from '../../src/components/SpaceSwitcher.jsx'
 import { useFlip, staggerDelay } from '../../src/motion.js'
 import '../../src/styles.css'
 
@@ -16,6 +17,15 @@ const categories = [
   { id: 'c2', name: '기획', icon: '💡', color: 'teal', parent_id: null, position: 1 }
 ]
 const slots = [{ id: 's1', name: '아침', icon: '🌅', position: 0 }]
+
+// 공간(서랍). 375px 에서 칩 줄이 옆으로 넘치지 않는지 함께 재려고 최대치(5개)를 준다.
+const spaces = [
+  { key: 'personal', name: '개인', icon: '🏠', position: 1 },
+  { key: 'class', name: '수업', icon: '🏫', position: 2 },
+  { key: 'space-3', name: '연구회', icon: '🔬', position: 3 },
+  { key: 'space-4', name: '동아리', icon: '🎨', position: 4 },
+  { key: 'space-5', name: '개인 기록보관함', icon: '🗂', position: 5 }
+]
 
 // 첨부 파일이 붙은 항목. 이름을 일부러 길게 두었다 —
 // 375px 에서 이름이 용량·✕ 를 밀어내는지가 이 화면으로 재려는 것이다.
@@ -115,6 +125,33 @@ if (mode === 'motion') {
   createRoot(document.getElementById('root')).render(<MotionDemo />)
 } else
 
+/* 상단 헤더의 공간 전환기 — 375px 에서 헤더가 옆으로 밀리는지 보는 화면.
+   🔴 Archive 를 통째로 띄우지 않는다(로그인·Supabase 를 흉내 내야 한다). 대신
+      **전환기 컴포넌트 자체**를 헤더 자리에 그대로 얹는다 — 재려는 것은
+      '로고 + 전환기 + 버튼들' 이 한 줄에 들어가는가 하나뿐이다.
+   이름이 가장 긴 공간을 고른 상태로 띄운다: 밀린다면 그때 밀린다. */
+if (mode === 'space') {
+  function TopbarDemo() {
+    const [cur, setCur] = React.useState('space-5')
+    return (
+      <div className="archive">
+        <header className="topbar">
+          <button type="button" className="brand">
+            <span className="brand-mark" aria-hidden="true">A</span>
+            <span className="brand-name">나의 아카이브</span>
+          </button>
+          <SpaceSwitcher spaces={spaces} current={cur} onSelect={setCur} onManage={() => {}} />
+          <div className="topbar-actions">
+            <button className="btn-primary">+ 새 항목</button>
+            <button className="btn-ghost more-toggle">⋯</button>
+          </div>
+        </header>
+      </div>
+    )
+  }
+  createRoot(document.getElementById('root')).render(<TopbarDemo />)
+} else
+
 // 잠금 화면은 모달이 아니라 화면 전체를 덮는 것이라 따로 그린다.
 // 뒤에 글자를 한 무더기 깔아 두고 그린다 — 가림막이 정말 불투명한지,
 // 뒤엣것이 한 글자라도 비치는지를 스크린샷으로 보려는 것이다.
@@ -135,6 +172,8 @@ createRoot(document.getElementById('root')).render(
     item={item}
     categories={categories}
     slots={slots}
+    spaces={spaces}
+    space="personal"
     userId="u1"
     onClose={() => {}}
     onSaved={() => {}}

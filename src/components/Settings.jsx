@@ -4,9 +4,12 @@ import { useEffect, useState } from 'react'
 import { THEME_ICON, THEME_LABEL, THEME_ORDER } from '../theme.js'
 import { useEscapeKey } from '../hooks.js'
 import {
-  supabase, fetchAllRows, totalFileBytes, totalImageBytes, formatBytes,
+  supabase, fetchAllRows, totalFileBytes, totalImageBytes, formatBytes, ICON_CHOICES,
   STORAGE_QUOTA_BYTES, STORAGE_QUOTA_LABEL, STORAGE_WARN_RATIO
 } from '../supabase.js'
+import {
+  MAX_SPACES, SPACE_ICON_FALLBACK, spaceOf, createSpace, updateSpace
+} from '../spaces.js'
 import {
   PIN_LENGTH, IDLE_CHOICES, cryptoReady, isValidPin,
   savePin, clearPin, readLockConfig, writeEnabled, writeIdleMinutes
@@ -17,7 +20,9 @@ import {
 } from '../share.js'
 
 export default function Settings({
-  email, userId, themePref, onThemeChange, onOpenPricing, onLockChanged, onClose
+  email, userId, themePref, onThemeChange,
+  spaces, space, onSpacesChanged,
+  onOpenPricing, onLockChanged, onClose
 }) {
   useEscapeKey(onClose)
 
@@ -30,14 +35,27 @@ export default function Settings({
   //    '0바이트다' 는 다른 말이고, 게이지가 그 둘을 같게 그리면 안 된다.
   const [used, setUsed] = useState(null)
   const [imageUsed, setImageUsed] = useState(null)
+  // 공간별 파일 용량 { 열쇠: 바이트 }. 공간 열이 없는 DB 에서는 늘 null 이다.
+  const [perSpace, setPerSpace] = useState(null)
 
   useEffect(() => {
     if (!supabase) return
     let alive = true
     ;(async () => {
       try {
-        const rows = await fetchAllRows('items', 'files')
-        if (alive) setUsed(totalFileBytes(rows))
+        // 공간 열이 없는 DB 에서 'space' 를 고르면 조회가 통째로 실패한다 — 있을 때만 묻는다
+        const rows = await fetchAllRows('items', spaces ? 'files, space' : 'files')
+        if (!alive) return
+        setUsed(totalFileBytes(rows))
+        if (spaces) {
+          const next = {}
+          for (const s of spaces) next[s.key] = 0
+          for (const r of rows) {
+            const key = spaceOf(r)
+            next[key] = (next[key] ?? 0) + totalFileBytes([r])
+          }
+          setPerSpace(next)
+        }
       } catch (err) {
         // files 열이 아직 없는 DB(setup.sql 미실행)면 여기로 온다. 게이지만 숨긴다.
         console.warn('[설정] 저장소 사용량을 읽지 못했습니다:', err)
@@ -53,7 +71,7 @@ export default function Settings({
       }
     })()
     return () => { alive = false }
-  }, [userId])
+  }, [userId, spaces])
 
   const known = used !== null || imageUsed !== null
   const total = (used ?? 0) + (imageUsed ?? 0)
@@ -116,11 +134,38 @@ export default function Settings({
               {')'}
               {warn && <span className="gauge-note"> · 80% 를 넘었어요</span>}
             </p>
+
+            {/* 공간별 내역. 🔴 **파일만** 나눌 수 있다 — 이미지는 계정 폴더 하나
+                (`{userId}/…`)에 담겨 있어 어느 서랍의 것인지 버킷이 알지 못한다.
+                모르는 것을 아는 척 나누느니 나눌 수 없다고 적는다. */}
+            {perSpace && spaces && spaces.length > 0 && (
+              <>
+                <ul className="space-usage">
+                  {spaces.map((s) => (
+                    <li key={s.key} className={s.key === space ? 'space-usage-on' : ''}>
+                      <span>{s.icon ?? SPACE_ICON_FALLBACK} {s.name}</span>
+                      <span>파일 {formatBytes(perSpace[s.key] ?? 0)}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="set-hint">
+                  공간별로는 첨부 파일만 나눌 수 있어요. 이미지는 계정 단위 폴더에 담겨 있어
+                  위 합계에만 들어갑니다.
+                </p>
+              </>
+            )}
+
             <p className="set-hint">
               Supabase 무료 플랜 기준입니다. 80%를 넘으면 정리하거나 확장을 검토하세요.
             </p>
           </section>
         )}
+
+        <SpaceSettings
+          spaces={spaces}
+          userId={userId}
+          onChanged={onSpacesChanged}
+        />
 
         <LockSettings userId={userId} onChanged={onLockChanged} />
 
@@ -147,6 +192,130 @@ export default function Settings({
         </section>
       </div>
     </div>
+  )
+}
+
+/* 공간(서랍) 설정 — 이름·아이콘 고치기와 새로 만들기.
+ *
+ * 🔴 **지우기는 두지 않았다.** 공간을 지우면 그 안의 항목이 갈 곳을 잃는다. 같이 지우면
+ *    되돌릴 수 없는 대량 삭제가 버튼 하나가 되고, 남겨 두면 어느 목록에도 안 나오는
+ *    유령 항목이 된다. 둘 다 이 기능이 감당할 값이 아니다 — 안 쓰는 서랍은 이름만
+ *    바꿔 두면 되고, 정말 필요해지면 '항목을 옮긴 뒤에 지운다' 를 따로 설계한다.
+ *    (REPORT-SPACE.md 에 남겨 두었다)
+ *
+ * spaces 가 null 이면 공간 열·표가 아직 없는 DB 다. 그때는 칸을 통째로 숨긴다 —
+ * 공유 링크 목록·저장소 게이지와 같은 규칙이다(빈 목록은 '없다' 로 잘못 읽힌다).
+ */
+function SpaceSettings({ spaces, userId, onChanged }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [iconOpen, setIconOpen] = useState(null)
+  const [newName, setNewName] = useState('')
+
+  if (!spaces) return null
+
+  const full = spaces.length >= MAX_SPACES
+
+  async function rename(s, value) {
+    const clean = String(value ?? '').trim()
+    if (!clean || clean === s.name) return
+    try {
+      await updateSpace(s.key, { name: clean })
+      setError('')
+      onChanged?.()
+    } catch (err) {
+      console.error('[설정] 공간 이름을 바꾸지 못했습니다:', err)
+      setError('이름을 저장하지 못했어요')
+    }
+  }
+
+  async function setIcon(s, icon) {
+    setIconOpen(null)
+    try {
+      await updateSpace(s.key, { icon })
+      setError('')
+      onChanged?.()
+    } catch (err) {
+      console.error('[설정] 공간 아이콘을 바꾸지 못했습니다:', err)
+      setError('아이콘을 저장하지 못했어요')
+    }
+  }
+
+  async function add(e) {
+    e.preventDefault()
+    const clean = newName.trim()
+    if (!clean || busy || full) return
+    setBusy(true)
+    try {
+      await createSpace({ userId, spaces, name: clean, icon: SPACE_ICON_FALLBACK })
+      setNewName('')
+      setError('')
+      onChanged?.()
+    } catch (err) {
+      console.error('[설정] 공간을 만들지 못했습니다:', err)
+      setError(err?.message || '공간을 만들지 못했어요')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="set-section">
+      <h3 className="set-head">공간</h3>
+      <ul className="cm-list">
+        {spaces.map((s) => (
+          <li key={s.key} className="cm-row">
+            <div className="cm-line">
+              <button
+                type="button"
+                className="cm-icon cat-gray"
+                onClick={() => setIconOpen(iconOpen === s.key ? null : s.key)}
+                aria-label={`${s.name} 아이콘 변경`}
+              >{s.icon ?? SPACE_ICON_FALLBACK}</button>
+              <input
+                className="cm-name"
+                defaultValue={s.name}
+                onBlur={(e) => rename(s, e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur() }}
+                aria-label={`${s.name} 이름`}
+              />
+            </div>
+            {iconOpen === s.key && (
+              <div className="cm-icons">
+                {ICON_CHOICES.map((ic) => (
+                  <button
+                    key={ic}
+                    type="button"
+                    className={`chip ${s.icon === ic ? 'chip-on' : ''}`}
+                    onClick={() => setIcon(s, ic)}
+                  >{ic}</button>
+                ))}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      {error && <p className="set-error">{error}</p>}
+
+      <form className="cm-add" onSubmit={add}>
+        <input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder={full ? `공간은 최대 ${MAX_SPACES}개까지예요` : '새 공간 이름'}
+          aria-label="새 공간 이름"
+          disabled={full}
+        />
+        <button type="submit" className="btn-primary btn-sm" disabled={busy || full || !newName.trim()}>
+          + 새 공간
+        </button>
+      </form>
+      <p className="set-hint">
+        항목·카테고리·태그·검색·오늘 탭이 공간마다 따로 나뉩니다. 테마와 잠금 PIN,
+        휴지통은 공간과 상관없이 계정 전체에 하나입니다.
+        공간은 지울 수 없어요 — 안에 든 항목이 갈 곳을 잃기 때문입니다.
+      </p>
+    </section>
   )
 }
 

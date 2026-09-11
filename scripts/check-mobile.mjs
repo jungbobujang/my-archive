@@ -675,6 +675,64 @@ check('1280px(잠금): 가로 스크롤 없음', lkw.docScrollW <= 1280, lkw.doc
 check('1280px(잠금): 가림막이 불투명하다', lkw.lockOpaque === true)
 check('1280px(잠금): 네 귀퉁이 모두 가림막이 집힌다', lkw.lockTopmost === true)
 
+/* ── 공간 전환기가 헤더를 밀지 않는가 ────────────────────────────────
+   상단 보조 버튼들은 예전에 한 줄에 안 들어가 ⋯ 메뉴로 접혔다. 전환기는 그 옆에
+   새로 끼어드는 것이라, 같은 일이 다시 일어나는지 375px 에서 직접 잰다.
+   🔴 '가로 스크롤 없음' 만 보지 않는다 — 이름이 통째로 사라져도 스크롤은 안 생긴다.
+      서랍 이름이 **눈에 보이는지**, 펼친 메뉴가 화면 밖으로 안 나가는지까지 본다. */
+for (const [label, width] of [['375px', 375], ['1280px', 1280]]) {
+  const page = await browser.newPage()
+  await page.setViewport({ width, height: 812, deviceScaleFactor: 2 })
+  await page.goto(`${base}?mode=space`, { waitUntil: 'networkidle0' })
+  await page.waitForSelector('.space-current', { timeout: 15000 })
+
+  const closed = await page.evaluate(() => {
+    const r = (sel) => {
+      const el = document.querySelector(sel)
+      if (!el) return null
+      const b = el.getBoundingClientRect()
+      return { x: Math.round(b.x), w: Math.round(b.width), h: Math.round(b.height), right: Math.round(b.right) }
+    }
+    const name = document.querySelector('.space-name')
+    return {
+      docScrollW: document.documentElement.scrollWidth,
+      current: r('.space-current'),
+      nameWidth: name ? Math.round(name.getBoundingClientRect().width) : 0,
+      nameText: name ? name.textContent.trim() : '',
+      actions: r('.topbar-actions'),
+      brandName: r('.brand-name')
+    }
+  })
+  check(`${label}(공간): 가로 스크롤 없음`, closed.docScrollW <= width, closed.docScrollW)
+  check(`${label}(공간): 전환기가 44px 급`, closed.current && closed.current.h >= 32, JSON.stringify(closed.current))
+  check(`${label}(공간): 서랍 이름이 보인다`, closed.nameWidth >= 24, `${closed.nameText} / ${closed.nameWidth}px`)
+  check(`${label}(공간): 보조 버튼과 겹치지 않는다`,
+    closed.current && closed.actions && closed.current.right <= closed.actions.x,
+    `${closed.current?.right} <= ${closed.actions?.x}`)
+
+  await page.click('.space-current')
+  await page.waitForSelector('.space-menu', { timeout: 5000 })
+  const opened = await page.evaluate(() => {
+    const menu = document.querySelector('.space-menu')
+    const b = menu.getBoundingClientRect()
+    return {
+      docScrollW: document.documentElement.scrollWidth,
+      left: Math.round(b.left),
+      right: Math.round(b.right),
+      items: document.querySelectorAll('.space-opt').length,
+      rowH: Math.round(document.querySelector('.space-opt').getBoundingClientRect().height),
+      nameOverflow: [...document.querySelectorAll('.space-opt')]
+        .some((el) => el.scrollWidth > el.clientWidth + 1)
+    }
+  })
+  check(`${label}(공간): 펼쳐도 가로 스크롤 없음`, opened.docScrollW <= width, opened.docScrollW)
+  check(`${label}(공간): 메뉴가 화면 안`, opened.left >= 0 && opened.right <= width, `${opened.left}~${opened.right}`)
+  check(`${label}(공간): 공간 5개 + 관리 1줄`, opened.items === 6, opened.items)
+  check(`${label}(공간): 줄이 옆으로 넘치지 않는다`, opened.nameOverflow === false)
+  await page.screenshot({ path: path.join(outDir, `space-switch-${width}.png`) })
+  await page.close()
+}
+
 await browser.close()
 await server.close()
 

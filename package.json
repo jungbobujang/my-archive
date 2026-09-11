@@ -11,6 +11,7 @@
     "check": "node scripts/check-modals.mjs",
     "check:files": "node scripts/check-files.mjs",
     "check:mobile": "node scripts/check-mobile.mjs",
+    "check:space": "node scripts/check-space.mjs",
     "check:share": "node scripts/check-share.mjs"
   },
   "dependencies": {

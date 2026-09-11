@@ -42,7 +42,8 @@ function Badges({ item, categories, itemCats }) {
   )
 }
 
-export default function Today({ categories, slots, userId, refreshKey, onOpen, onChanged, onSlotsChanged }) {
+// space 가 null 이면 공간 열이 아직 없는 DB 다 — 그때는 조건을 붙이지 않는다.
+export default function Today({ categories, slots, userId, space, refreshKey, onOpen, onChanged, onSlotsChanged }) {
   const toast = useToast()
   const [todos, setTodos] = useState([])
   const [upcoming, setUpcoming] = useState([])
@@ -57,17 +58,20 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
     setLoading(true)
     try {
       const today = ymd(new Date())
+      // 네 묶음이 모두 같은 서랍만 본다. 한 곳이라도 빠지면 '오늘' 에 다른 공간의
+      // 할 일이 섞여, 공간을 나눈 의미가 그 자리에서 사라진다.
+      const inSpace = (q) => (space ? q.eq('space', space) : q)
 
       // 1) 오늘의 할 것 — 기한이 없거나 오늘까지인 것
-      const { data: todoRows, error: todoErr } = await supabase
-        .from('items').select('*').eq('status', 'todo').is('deleted_at', null)
+      const { data: todoRows, error: todoErr } = await inSpace(supabase
+        .from('items').select('*').eq('status', 'todo').is('deleted_at', null))
         .or(`due_date.is.null,due_date.lte.${today}`)
         .order('created_at', { ascending: true })
       if (todoErr) throw todoErr
 
       // 1-b) 예정 — 내일 이후
-      const { data: upcomingRows, error: upErr } = await supabase
-        .from('items').select('*').eq('status', 'todo').is('deleted_at', null)
+      const { data: upcomingRows, error: upErr } = await inSpace(supabase
+        .from('items').select('*').eq('status', 'todo').is('deleted_at', null))
         .gt('due_date', today)
         .order('due_date', { ascending: true })
         .range(0, UPCOMING_LIMIT - 1)
@@ -76,7 +80,7 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
       // 2) 미분류 — 소속이 하나도 없는 항목.
       //    id 목록만 가볍게 받아 차집합을 구한 뒤 필요한 행만 다시 읽는다.
       const [idx, links] = [
-        await fetchAllRows('items', 'id, created_at', (q) => q.is('deleted_at', null).order('created_at', { ascending: false })),
+        await fetchAllRows('items', 'id, created_at', (q) => inSpace(q.is('deleted_at', null)).order('created_at', { ascending: false })),
         await fetchAllRows('item_categories', 'item_id')
       ]
       const categorized = new Set(links.map((r) => r.item_id))
@@ -93,9 +97,9 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
       }
 
       // 3) 최근 저장
-      const { data: recentRows, error: recentErr } = await supabase
+      const { data: recentRows, error: recentErr } = await inSpace(supabase
         .from('items').select('*')
-        .is('deleted_at', null)
+        .is('deleted_at', null))
         .order('created_at', { ascending: false })
         .range(0, RECENT_LIMIT - 1)
       if (recentErr) throw recentErr
@@ -124,7 +128,7 @@ export default function Today({ categories, slots, userId, refreshKey, onOpen, o
       toast.error('오늘 화면을 불러오지 못했어요. 연결 상태를 확인해 주세요')
     }
     setLoading(false)
-  }, [toast])
+  }, [toast, space])
 
   useEffect(() => { load() }, [load, refreshKey])
 

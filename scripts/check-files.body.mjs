@@ -1562,7 +1562,8 @@ const imagesBucket = () => store.buckets['archive-images']
   window.sessionStorage.clear()
   const mk = (n) => Array.from({ length: n }, (_, i) => ({
     id: `it${i + 1}`, user_id: 'u1', title: `항목 ${i + 1}`, content: '', tags: [],
-    link_url: null, image_url: null, files: [], status: 'none', deleted_at: null,
+    // space 는 DB 에서 not null default 'personal' 이다 — 실제 행에는 언제나 값이 있다
+    link_url: null, image_url: null, files: [], status: 'none', deleted_at: null, space: 'personal',
     created_at: new Date(2026, 0, 1).toISOString(), updated_at: new Date(2026, 0, 1).toISOString()
   }))
   store.rows.items.push(...mk(15))

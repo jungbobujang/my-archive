@@ -3,7 +3,9 @@ import { useEffect, useState } from 'react'
 import { supabase, COLOR_KEYS, ICON_CHOICES, subtreeIds, treeOrder } from '../supabase.js'
 import { useEscapeKey, confirmDiscard } from '../hooks.js'
 
-export default function CategoryManager({ categories, userId, onClose, onChanged }) {
+// categories 는 **지금 공간의 것만** 넘어온다 (Archive 가 걸러서 준다).
+// space 가 null 이면 공간 열이 아직 없는 DB 라, 새 카테고리에도 붙이지 않는다.
+export default function CategoryManager({ categories, userId, space, spaceName, onClose, onChanged }) {
   const [rows, setRows] = useState(categories)
   const [newName, setNewName] = useState('')
   const [busy, setBusy] = useState(false)
@@ -94,7 +96,11 @@ export default function CategoryManager({ categories, userId, onClose, onChanged
     const position = rows.reduce((max, c) => Math.max(max, c.position ?? 0), 0) + 1
     const { data, error: err } = await supabase
       .from('categories')
-      .insert({ name: clean, icon: '📁', color: 'gray', position, parent_id: null, user_id: userId })
+      .insert({
+        name: clean, icon: '📁', color: 'gray', position, parent_id: null,
+        ...(space ? { space } : {}),
+        user_id: userId
+      })
       .select()
       .single()
     setBusy(false)
@@ -114,6 +120,12 @@ export default function CategoryManager({ categories, userId, onClose, onChanged
           <h2>카테고리 관리</h2>
           <button className="btn-ghost btn-sm" onClick={handleClose} aria-label="닫기">✕</button>
         </div>
+
+        {/* 어느 서랍의 카테고리를 고치고 있는지 적는다 — 카테고리는 공간별로 갈라져 있어서,
+            여기서 만든 것이 다른 공간에는 보이지 않는다. */}
+        {spaceName && (
+          <p className="cm-scope">{spaceName} 공간의 카테고리입니다</p>
+        )}
 
         {rows.length === 0 && (
           <p className="cm-empty">아직 카테고리가 없어요. 아래에서 첫 카테고리를 만들어 보세요.</p>
