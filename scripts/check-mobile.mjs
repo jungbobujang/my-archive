@@ -733,6 +733,94 @@ for (const [label, width] of [['375px', 375], ['1280px', 1280]]) {
   await page.close()
 }
 
+/* ── 계획 격자: 375px 에서 4칸 표가 어떻게 접히는가 ────────────────────
+   🔴 재려는 것은 하나다: **세로축이 섹션이 되고, 그 안에서 지평 셋은 가로로 남는가.**
+      지평까지 세로로 쌓아 버리면 줄이 스물넷이 되어 격자가 목록이 되고, 그러면
+      '어디가 비었나' 를 한눈에 보는 일이 다시 스크롤이 된다 — 격자를 쓸 이유가 사라진다.
+   🔴 함께 재는 것: 가로 스크롤이 없는가, 접기 버튼이 손가락에 맞는가,
+      110px 남짓한 칸에서 제목이 칸 밖으로 새지 않는가. */
+for (const [label, width, height] of [['375px', 375, 812], ['1280px', 1280, 900]]) {
+  const page = await browser.newPage()
+  await page.setViewport({ width, height, deviceScaleFactor: 2 })
+  await page.goto(`${base}?mode=plan`, { waitUntil: 'networkidle0' })
+  await page.waitForSelector('.plan-grid', { timeout: 15000 })
+
+  const g = await page.evaluate(() => {
+    const grid = document.querySelector('.plan-grid')
+    const rows = [...document.querySelectorAll('.plan-row')]
+    const first = rows[0]
+    const cells = first ? [...first.querySelectorAll('.plan-cell')] : []
+    const box = (el) => {
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { x: Math.round(r.left), right: Math.round(r.right), w: Math.round(r.width), h: Math.round(r.height) }
+    }
+    // 같은 줄의 칸들이 정말 나란히 있는가 (세로로 쌓였으면 top 이 서로 다르다)
+    const tops = cells.map((c) => Math.round(c.getBoundingClientRect().top))
+    return {
+      docScrollW: document.documentElement.scrollWidth,
+      narrow: grid.classList.contains('plan-grid-narrow'),
+      headShown: !!document.querySelector('.plan-grid-head'),
+      rows: rows.length,
+      cellsInRow: cells.length,
+      cellsSideBySide: tops.length > 0 && tops.every((t) => t === tops[0]),
+      cell: box(cells[0]),
+      lastCellRight: cells.length ? Math.round(cells[cells.length - 1].getBoundingClientRect().right) : 0,
+      toggle: box(document.querySelector('.plan-row-toggle')),
+      // 칸 안에서 제목이 밖으로 새는가 (말줄임이 걸려 있으면 새지 않는다)
+      titleOverflow: [...document.querySelectorAll('.plan-card-title')]
+        .some((el) => el.getBoundingClientRect().right > el.closest('.plan-cell').getBoundingClientRect().right + 1),
+      emptyCells: document.querySelectorAll('.plan-cell-empty').length,
+      emptyLabelled: [...document.querySelectorAll('.plan-cell-empty')]
+        .every((c) => c.querySelector('.plan-cell-none')?.textContent.trim() === '비어 있음'),
+      whenShown: getComputedStyle(document.querySelector('.plan-cell-when')).display !== 'none',
+      headRow: box(document.querySelector('.plan-row-head'))
+    }
+  })
+
+  check(`${label}(계획): 가로 스크롤 없음`, g.docScrollW <= width, g.docScrollW)
+  check(`${label}(계획): 세로축 8줄`, g.rows === 8, g.rows)
+  // 넓든 좁든 **지평 셋은 언제나 한 줄에 가로로** 있다
+  check(`${label}(계획): 한 줄에 지평 3칸`, g.cellsInRow === 3, g.cellsInRow)
+  check(`${label}(계획): 3칸이 세로로 쌓이지 않는다`, g.cellsSideBySide === true)
+  check(`${label}(계획): 칸이 화면 안에 들어온다`, g.lastCellRight <= width, `${g.lastCellRight} <= ${width}`)
+  check(`${label}(계획): 제목이 칸 밖으로 새지 않는다`, g.titleOverflow === false)
+  check(`${label}(계획): 빈 칸이 "비어 있음" 이라고 적는다`, g.emptyLabelled === true, g.emptyCells)
+
+  if (width === 375) {
+    check('375px(계획): 아코디언으로 바뀐다', g.narrow === true)
+    check('375px(계획): 가로축 머리를 접는다', g.headShown === false)
+    // 머리가 없으니 칸마다 지평 이름이 대신 붙어야 한다 — 안 그러면 어느 칸이 뭔지 모른다
+    check('375px(계획): 칸마다 지평 이름이 붙는다', g.whenShown === true)
+    check('375px(계획): 접기 버튼이 44px 급', g.toggle && g.toggle.h >= 44, JSON.stringify(g.toggle))
+    check('375px(계획): 칸 폭이 100px 이상', g.cell && g.cell.w >= 100, JSON.stringify(g.cell))
+
+    // 접었다 펴기
+    await page.click('.plan-row-toggle')
+    const shut = await page.evaluate(() => ({
+      cells: document.querySelectorAll('.plan-row')[0].querySelectorAll('.plan-cell').length,
+      count: document.querySelectorAll('.plan-row')[0].querySelector('.plan-row-count')?.textContent,
+      docScrollW: document.documentElement.scrollWidth
+    }))
+    check('375px(계획): 접으면 칸이 사라진다', shut.cells === 0, shut.cells)
+    check('375px(계획): 접어도 개수는 남는다', shut.count === '2', shut.count)
+    check('375px(계획): 접어도 가로 스크롤 없음', shut.docScrollW <= 375, shut.docScrollW)
+    await page.screenshot({ path: path.join(outDir, 'plan-375-shut.png'), fullPage: true })
+    await page.click('.plan-row-toggle')
+    check('375px(계획): 다시 펴진다', await page.evaluate(
+      () => document.querySelectorAll('.plan-row')[0].querySelectorAll('.plan-cell').length === 3))
+  } else {
+    check('1280px(계획): 표 모양 그대로다 (아코디언 아님)', g.narrow === false)
+    check('1280px(계획): 가로축 머리가 있다', g.headShown === true)
+    // 넓은 화면에서는 가로축 머리가 이미 말하고 있으므로 칸에서는 뺀다
+    check('1280px(계획): 칸에 지평 이름을 두 번 적지 않는다', g.whenShown === false)
+    check('1280px(계획): 줄 머리는 누르는 버튼이 아니다', g.toggle === null)
+  }
+
+  await page.screenshot({ path: path.join(outDir, `plan-${width}.png`), fullPage: true })
+  await page.close()
+}
+
 await browser.close()
 await server.close()
 

@@ -13,13 +13,14 @@
 --   1) categories     계층 카테고리
 --   2) time_slots     '오늘' 탭의 시간대
 --  2-b) spaces        공간(서랍). 한 계정 안에서 아카이브를 나눈다
---   3) items          본문(아이디어/대본/링크/할 일)
+--  2-c) plan_domains  계획 격자의 세로축(영역). 수입·성장·건강…
+--   3) items          본문(아이디어/대본/링크/할 일/계획)
 --   4) item_categories  항목 <-> 카테고리 다대다
 --   5) RLS 정책 (본인 데이터만)
 --   6) 이미지 스토리지 버킷 archive-images
 --   7) 파일 스토리지 버킷 archive-files (비공개)
 --   8) updated_at 자동 갱신
---   9) 신규 가입자 기본 카테고리 4종 + 시간대 5종 + 공간 2종 자동 생성
+--   9) 신규 가입자 기본 카테고리 4종 + 시간대 5종 + 공간 2종 + 계획 영역 6종 자동 생성
 --  10) 항목 공유 링크 shares + 열람 함수 share_view (로그인 없이 한 항목만 보기)
 -- ============================================================
 
@@ -118,6 +119,42 @@ create policy "own spaces all" on public.spaces
 
 
 -- ============================================================
+-- 2-c) 계획 영역 — 계획 격자의 세로축
+--
+--    격자는 지평(가로: 단기·중기·장기) × 영역(세로)이다. 가로축은 셋으로 고정이라
+--    코드 상수지만(src/plan.js HORIZONS), 세로축은 사람마다 다르므로 표로 둔다.
+--
+--    🔴 items.domain 을 이 표로 **외래키로 묶지 않았다.** spaces 와 같은 이유다:
+--       묶으면 열을 추가하는 것부터 마이그레이션이 되고 백업 복원 순서가 한 겹 는다.
+--       목록에 없는 열쇠가 들어와도 격자는 '미지정' 줄에 모아 보여 준다
+--       (src/plan.js domainOf) — 계획이 화면에서 사라지지 않는다.
+--    🔴 공간(space)별로 나누지 않았다. 서랍을 바꾼다고 '건강' 이 건강이 아니게 되지는
+--       않는다. 계획이 공간별로 갈리는 것은 items.space 가 하는 일이다.
+--       (자세한 판단 근거는 src/plan.js 머리말과 REPORT-PLAN.md 2절)
+-- ============================================================
+create table if not exists public.plan_domains (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- src/plan.js 의 BUILTIN_DOMAINS 와 같은 값이어야 한다
+  key text not null,
+  name text not null,
+  -- src/supabase.js 의 COLOR_KEYS 와 같은 값이어야 한다
+  color text default 'gray',
+  position int default 0,
+  created_at timestamptz default now(),
+  primary key (user_id, key)
+);
+
+create index if not exists plan_domains_user_pos_idx
+  on public.plan_domains (user_id, position);
+
+alter table public.plan_domains enable row level security;
+
+drop policy if exists "own plan_domains all" on public.plan_domains;
+create policy "own plan_domains all" on public.plan_domains
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+
+-- ============================================================
 -- 3) 항목
 -- ============================================================
 create table if not exists public.items (
@@ -154,6 +191,25 @@ create table if not exists public.items (
   -- 이 열이 생기는 순간 기존 항목은 전부 '개인'(personal)으로 편입된다.
   space text not null default 'personal',
 
+  -- ── 계획 격자 ────────────────────────────────────────────────
+  -- 🔴 기본값이 전부 null 이다. **기존 항목은 하나도 계획이 되지 않는다** — 적어 둔 것과
+  --    계획하는 것은 다른 일이라, 열이 생겼다고 아카이브 전체가 격자에 쏟아지면 안 된다.
+  -- 지평. null | short(이번 달) | mid(올해) | long(수년)
+  horizon text,
+  -- 계획 상태. null(계획 아님) | planned | doing | done | dropped
+  -- 🔴 위 status(none/todo/done)와 **다른 열**이다. 저쪽은 '오늘 할 일인가',
+  --    이쪽은 '이 계획이 어디까지 왔나' 를 잰다 (src/plan.js 머리말).
+  plan_status text,
+  -- 영역. plan_domains.key 를 가리키지만 외래키로 묶지 않는다(2-c 절 참고).
+  domain text,
+  -- 관련 항목 id 목록: ["uuid", …]. '어느 아이디어에서 나온 계획인가' 를 적는다.
+  related_ids jsonb not null default '[]'::jsonb,
+  -- plan_status 가 마지막으로 바뀐 시각.
+  -- 🔴 updated_at 으로 대신할 수 없다. 저쪽은 제목만 고쳐도 갱신되므로, 그것으로 재면
+  --    7일째 멈춰 있던 계획이 오타 한 번 고친 것만으로 '움직인 것' 이 된다 —
+  --    주간 리뷰의 정체 목록이 조용히 비어 간다.
+  plan_status_at timestamptz,
+
   -- 휴지통(soft delete). null 이면 살아 있는 항목.
   deleted_at timestamptz,
 
@@ -173,9 +229,27 @@ alter table public.items add column if not exists link_url text;
 alter table public.items add column if not exists deleted_at timestamptz;
 alter table public.items add column if not exists files jsonb not null default '[]'::jsonb;
 alter table public.items add column if not exists space text not null default 'personal';
+-- 계획 격자 4열 + 상태 변경 시각. 전부 null 로 들어가므로 기존 항목은 그대로다.
+alter table public.items add column if not exists horizon text;
+alter table public.items add column if not exists plan_status text;
+alter table public.items add column if not exists domain text;
+alter table public.items add column if not exists related_ids jsonb not null default '[]'::jsonb;
+alter table public.items add column if not exists plan_status_at timestamptz;
 
 -- v1.0 에서 category 가 not null 이었다. 코드가 값을 넣지 않으므로 제약을 푼다.
 alter table public.items alter column category drop not null;
+
+/* 값 검사. 🔴 열을 문자열로 둔 채 아무 값이나 받으면, 오타 하나가 격자에서 통째로
+   사라지는 계획이 된다(모르는 지평은 어느 칸에도 안 들어간다). 화면은 이미 세 값
+   중에서만 고르게 되어 있지만, 백업 복원·SQL 편집처럼 화면을 거치지 않는 길이 있다.
+   drop 후 add 라 몇 번을 실행해도 안전하다. */
+alter table public.items drop constraint if exists items_horizon_check;
+alter table public.items add constraint items_horizon_check
+  check (horizon is null or horizon in ('short', 'mid', 'long'));
+
+alter table public.items drop constraint if exists items_plan_status_check;
+alter table public.items add constraint items_plan_status_check
+  check (plan_status is null or plan_status in ('planned', 'doing', 'done', 'dropped'));
 
 create index if not exists items_user_created_idx
   on public.items (user_id, created_at desc);
@@ -193,6 +267,12 @@ create index if not exists items_user_deleted_idx
 -- 예정 목록 (기한 순)
 create index if not exists items_user_due_idx
   on public.items (user_id, due_date) where status = 'todo';
+/* 계획 탭: '이 서랍의 계획만' 을 한 번에 긁는다. 부분 인덱스라 계획이 아닌 항목
+   (거의 전부다)은 인덱스에 들어가지도 않는다 — 아카이브가 수천 개여도 이 인덱스는
+   계획 수만큼만 크다. */
+create index if not exists items_user_plan_idx
+  on public.items (user_id, space, plan_status)
+  where plan_status is not null and deleted_at is null;
 
 alter table public.items enable row level security;
 
@@ -357,6 +437,18 @@ begin
     insert into public.spaces (user_id, key, name, icon, position) values
       (uid, 'personal', '개인', '🏠', 1),
       (uid, 'class',    '수업', '🏫', 2);
+  end if;
+
+  -- 계획 영역 6종. 열쇠·색은 src/plan.js 의 BUILTIN_DOMAINS 와 같아야 한다.
+  -- 이름을 바꾼 사람에게 기본 이름이 되살아나지 않도록 '하나라도 있으면 건너뛴다'.
+  if not exists (select 1 from public.plan_domains where user_id = uid) then
+    insert into public.plan_domains (user_id, key, name, color, position) values
+      (uid, 'income',   '수입', 'amber',  1),
+      (uid, 'growth',   '성장', 'purple', 2),
+      (uid, 'health',   '건강', 'green',  3),
+      (uid, 'create',   '창작', 'coral',  4),
+      (uid, 'relation', '관계', 'pink',   5),
+      (uid, 'life',     '생활', 'teal',   6);
   end if;
 end;
 $$;

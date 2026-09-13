@@ -1,5 +1,5 @@
 // 여러 모달이 똑같이 쓰던 자잘한 훅들.
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { IDLE_TICK_MS } from './lock.js'
 
 // 폰에서 키보드가 올라오면 "실제로 보이는 높이"가 줄어든다.
@@ -98,6 +98,34 @@ export function useIdleLock({ enabled, minutes, onIdle }) {
       for (const name of events) window.removeEventListener(name, bump, { capture: true })
     }
   }, [enabled, minutes])
+}
+
+// 화면 폭이 좁은가. 계획 격자가 '표' 와 '영역별 아코디언' 중 무엇을 그릴지 이 값으로 가른다.
+//
+// 🔴 CSS 만으로 접지 않는 이유: 아코디언은 **접힘 상태를 기억해야** 하고, 그 상태는
+//    넓은 화면에서는 있어서는 안 되는 값이다. CSS 로만 모양을 바꾸면 폰에서 접어 둔 영역이
+//    노트북에서도 사라져 보인다 — 격자의 목적(어디가 비었나)이 그 순간 무너진다.
+// 🔴 reorder.js 의 useCoarsePointer 와 같은 모양으로 둔다(옛 사파리의 addListener 포함).
+//    기준은 폭 하나다: 손가락인지 마우스인지가 아니라, 4칸이 한 줄에 들어가는지가 문제다.
+export const NARROW_QUERY = '(max-width: 639px)'
+
+export function useNarrow(query = NARROW_QUERY) {
+  const get = () => {
+    try { return Boolean(window.matchMedia?.(query)?.matches) } catch { return false }
+  }
+  const [narrow, setNarrow] = useState(get)
+  useEffect(() => {
+    let mq = null
+    try { mq = window.matchMedia?.(query) } catch { mq = null }
+    if (!mq) return undefined
+    const on = () => setNarrow(Boolean(mq.matches))
+    on()
+    mq.addEventListener ? mq.addEventListener('change', on) : mq.addListener?.(on)
+    return () => {
+      mq.removeEventListener ? mq.removeEventListener('change', on) : mq.removeListener?.(on)
+    }
+  }, [query])
+  return narrow
 }
 
 // 닫기 전에 한 번 물어본다. 쓰던 게 없으면 묻지 않는다.

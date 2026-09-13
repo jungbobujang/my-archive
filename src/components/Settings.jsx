@@ -5,11 +5,14 @@ import { THEME_ICON, THEME_LABEL, THEME_ORDER } from '../theme.js'
 import { useEscapeKey } from '../hooks.js'
 import {
   supabase, fetchAllRows, totalFileBytes, totalImageBytes, formatBytes, ICON_CHOICES,
-  STORAGE_QUOTA_BYTES, STORAGE_QUOTA_LABEL, STORAGE_WARN_RATIO
+  COLOR_KEYS, STORAGE_QUOTA_BYTES, STORAGE_QUOTA_LABEL, STORAGE_WARN_RATIO
 } from '../supabase.js'
 import {
   MAX_SPACES, SPACE_ICON_FALLBACK, spaceOf, createSpace, updateSpace
 } from '../spaces.js'
+import {
+  MAX_DOMAINS, DOMAIN_COLOR_FALLBACK, createDomain, updateDomain, swapDomainPosition
+} from '../plan.js'
 import {
   PIN_LENGTH, IDLE_CHOICES, cryptoReady, isValidPin,
   savePin, clearPin, readLockConfig, writeEnabled, writeIdleMinutes
@@ -22,6 +25,7 @@ import {
 export default function Settings({
   email, userId, themePref, onThemeChange,
   spaces, space, onSpacesChanged,
+  domains, onDomainsChanged,
   onOpenPricing, onLockChanged, onClose
 }) {
   useEscapeKey(onClose)
@@ -165,6 +169,12 @@ export default function Settings({
           spaces={spaces}
           userId={userId}
           onChanged={onSpacesChanged}
+        />
+
+        <DomainSettings
+          domains={domains}
+          userId={userId}
+          onChanged={onDomainsChanged}
         />
 
         <LockSettings userId={userId} onChanged={onLockChanged} />
@@ -314,6 +324,156 @@ function SpaceSettings({ spaces, userId, onChanged }) {
         항목·카테고리·태그·검색·오늘 탭이 공간마다 따로 나뉩니다. 테마와 잠금 PIN,
         휴지통은 공간과 상관없이 계정 전체에 하나입니다.
         공간은 지울 수 없어요 — 안에 든 항목이 갈 곳을 잃기 때문입니다.
+      </p>
+    </section>
+  )
+}
+
+/* 계획 영역 설정 — 격자의 세로축. 이름·색·순서를 고치고 새로 만든다 (요구사항 2).
+ *
+ * 🔴 **지우기는 두지 않았다.** 공간과 같은 이유다: 영역을 지우면 그 영역에 있던 계획이
+ *    갈 곳을 잃는다. 다만 공간과 달리 여기서는 잃어도 조용히 사라지지 않는다 —
+ *    격자가 모르는 열쇠를 '미지정' 줄로 모아 주기 때문이다(src/plan.js domainOf).
+ *    그래도 버튼은 안 둔다. 여덟 줄짜리 축에서 지우기가 필요한 일은 드물고,
+ *    안 쓰는 줄은 이름을 바꿔 두면 그만이다.
+ * 🔴 순서는 ▲▼ 버튼으로 바꾼다. 격자의 세로 차례가 곧 position 이라 바꾸면 화면이
+ *    그대로 따라온다. 끌기를 쓰지 않은 이유는 모달 안 파일 목록과 같다 —
+ *    세로 목록에서는 한 칸씩 옮기는 일이 대부분이고 버튼이 더 정확하다.
+ *
+ * domains 가 null 이면 계획 열·표가 아직 없는 DB 다. 그때는 칸을 통째로 숨긴다.
+ */
+function DomainSettings({ domains, userId, onChanged }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [colorOpen, setColorOpen] = useState(null)
+  const [newName, setNewName] = useState('')
+
+  if (!domains) return null
+
+  const full = domains.length >= MAX_DOMAINS
+  const sorted = [...domains].sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+
+  async function run(job, whenFailed) {
+    try {
+      await job()
+      setError('')
+      onChanged?.()
+    } catch (err) {
+      console.error(`[설정] ${whenFailed}:`, err)
+      setError(`${whenFailed}`)
+    }
+  }
+
+  async function rename(d, value) {
+    const clean = String(value ?? '').trim()
+    if (!clean || clean === d.name) return
+    await run(() => updateDomain(d.key, { name: clean }), '이름을 저장하지 못했어요')
+  }
+
+  async function setColor(d, color) {
+    setColorOpen(null)
+    await run(() => updateDomain(d.key, { color }), '색을 저장하지 못했어요')
+  }
+
+  async function move(i, dir) {
+    const a = sorted[i]
+    const b = sorted[i + dir]
+    if (!a || !b) return
+    await run(() => swapDomainPosition(a, b), '순서를 바꾸지 못했어요')
+  }
+
+  async function add(e) {
+    e.preventDefault()
+    const clean = newName.trim()
+    if (!clean || busy || full) return
+    setBusy(true)
+    try {
+      await createDomain({ userId, domains, name: clean, color: DOMAIN_COLOR_FALLBACK })
+      setNewName('')
+      setError('')
+      onChanged?.()
+    } catch (err) {
+      console.error('[설정] 영역을 만들지 못했습니다:', err)
+      setError(err?.message || '영역을 만들지 못했어요')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="set-section">
+      <h3 className="set-head">계획 영역</h3>
+      <ul className="cm-list">
+        {sorted.map((d, i) => (
+          <li key={d.key} className="cm-row">
+            <div className="cm-line">
+              <button
+                type="button"
+                className={`cm-icon cat-${d.color ?? DOMAIN_COLOR_FALLBACK}`}
+                onClick={() => setColorOpen(colorOpen === d.key ? null : d.key)}
+                aria-label={`${d.name} 색 변경`}
+              >●</button>
+              <input
+                className="cm-name"
+                defaultValue={d.name}
+                onBlur={(e) => rename(d, e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur() }}
+                aria-label={`${d.name} 이름`}
+              />
+              <span className="file-move">
+                <button
+                  type="button"
+                  className="file-move-btn"
+                  onClick={() => move(i, -1)}
+                  disabled={i === 0}
+                  aria-label={`${d.name} 위로`}
+                  title="위로"
+                >▲</button>
+                <button
+                  type="button"
+                  className="file-move-btn"
+                  onClick={() => move(i, 1)}
+                  disabled={i === sorted.length - 1}
+                  aria-label={`${d.name} 아래로`}
+                  title="아래로"
+                >▼</button>
+              </span>
+            </div>
+            {colorOpen === d.key && (
+              <div className="cm-icons">
+                {COLOR_KEYS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    className={`chip chip-dot-${c} ${d.color === c ? 'chip-on' : ''}`}
+                    onClick={() => setColor(d, c)}
+                    aria-label={`${d.name} 색을 ${c} 로`}
+                  >●</button>
+                ))}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      {error && <p className="set-error">{error}</p>}
+
+      <form className="cm-add" onSubmit={add}>
+        <input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder={full ? `영역은 최대 ${MAX_DOMAINS}개까지예요` : '새 영역 이름'}
+          aria-label="새 영역 이름"
+          disabled={full}
+        />
+        <button type="submit" className="btn-primary btn-sm" disabled={busy || full || !newName.trim()}>
+          + 새 영역
+        </button>
+      </form>
+      <p className="set-hint">
+        계획 격자의 세로축입니다. 여기 순서가 격자의 위아래 차례가 돼요.
+        영역은 계정에 하나뿐이라 공간(서랍)을 바꿔도 같은 축을 씁니다 — 나뉘는 것은 계획 자체입니다.
+        영역은 지울 수 없어요 — 그 안에 든 계획이 갈 곳을 잃기 때문입니다.
       </p>
     </section>
   )

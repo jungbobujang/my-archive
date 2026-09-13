@@ -4,8 +4,10 @@
 // 그때 화면의 카드 24개가 전부 다시 그려질 이유는 없다.
 // 대신 Archive 쪽에서 콜백을 useCallback 으로 고정하고 categoryIds 도
 // 없을 때 같은 빈 배열을 넘겨야 memo 가 실제로 걸린다.
-import { memo } from 'react'
+import { memo, useState } from 'react'
 import { parseFiles, parseImages } from '../supabase.js'
+import { horizonLabel, isPlan, domainLabel, planStatusLabel } from '../plan.js'
+import PlanQuickAdd from './PlanQuickAdd.jsx'
 
 function formatDate(iso) {
   const d = new Date(iso)
@@ -22,7 +24,11 @@ function formatDate(iso) {
    🔴 모션 판단을 카드가 스스로 하지 않는다. '새로 들어왔나' 는 목록 전체를 아는 쪽만
       알 수 있고, 카드가 각자 판단하면 다시 그려질 때마다 매번 떠오른다. */
 function ItemCard({ item, categories, categoryIds, view, onOpen, onStar, onTag, onDone,
-  enter = false, delay = 0, saved = false }) {
+  domains = null, onPlan = null, enter = false, delay = 0, saved = false }) {
+  // 격자에 올리는 작은 창. 카드마다 상태를 들지만 열려 있는 것은 늘 하나뿐이라
+  // (바깥을 누르면 닫힌다) 목록 전체의 렌더에는 영향이 없다.
+  const [quickOpen, setQuickOpen] = useState(false)
+  const planned = isPlan(item)
   // 소속 순서는 categories 정렬(position)을 따른다
   const own = (categories ?? []).filter((c) => (categoryIds ?? []).includes(c.id))
   const shown = own.slice(0, 3)
@@ -102,8 +108,33 @@ function ItemCard({ item, categories, categoryIds, view, onOpen, onStar, onTag, 
             <button className="link-mini link-mini-btn" onClick={() => onOpen(item)}>🔗 링크 {links.length}개</button>
           )}
           {fileCount > 0 && <span className="badge badge-gray">📎{fileCount}</span>}
+          {/* 이미 격자에 올라간 것은 **어디에 올라갔는지** 적는다. 여기서 다시 올릴
+              버튼을 보여 주면 두 번 올라가는 줄 알고, 실제로는 자리만 덮어쓴다. */}
+          {planned && (
+            <span className="badge badge-gray plan-mini" title="계획 격자에 올라가 있어요">
+              🧭 {domainLabel(domains, item.domain) }
+              {' · '}{horizonLabel(item.horizon)}
+              {' · '}{planStatusLabel(item.plan_status)}
+            </span>
+          )}
+          {/* 계획 열이 없는 DB 에서는 onPlan 이 오지 않아 이 버튼도 없다 */}
+          {!planned && onPlan && domains && (
+            <button
+              className="link-mini link-mini-btn plan-add"
+              onClick={() => setQuickOpen((v) => !v)}
+              aria-expanded={quickOpen}
+              title="계획 격자에 올리기"
+            >🧭 계획으로</button>
+          )}
           <span className="card-date">{formatDate(item.created_at)}</span>
         </div>
+        {quickOpen && (
+          <PlanQuickAdd
+            domains={domains}
+            onAdd={(fields) => { setQuickOpen(false); onPlan(item, fields) }}
+            onClose={() => setQuickOpen(false)}
+          />
+        )}
       </div>
     </article>
   )

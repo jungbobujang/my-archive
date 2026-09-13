@@ -10,6 +10,9 @@ import {
   DEFAULT_SPACE, BUILTIN_SPACES, SPACE_COLUMN_MESSAGE,
   probeSpaceColumn, loadSpaces, readSpacePref, writeSpacePref, spaceOf, findSpace
 } from '../spaces.js'
+import {
+  BUILTIN_DOMAINS, DEFAULT_PLAN_STATUS, PLAN_COLUMN_MESSAGE, probePlanColumns, loadDomains
+} from '../plan.js'
 import { useTheme } from '../theme.js'
 import { useToast } from './Toast.jsx'
 import ItemModal from './ItemModal.jsx'
@@ -17,6 +20,7 @@ import ItemCard from './ItemCard.jsx'
 import CategoryManager from './CategoryManager.jsx'
 import MindMap from './MindMap.jsx'
 import Today from './Today.jsx'
+import Plan from './Plan.jsx'
 import Trash from './Trash.jsx'
 import SpaceSwitcher from './SpaceSwitcher.jsx'
 import { SkeletonCards } from './Skeleton.jsx'
@@ -31,7 +35,7 @@ const NO_CATEGORIES = []
 
 // 백업 복원 단계 수. 화면 문구가 이 값을 보고 적는다 — 단계를 늘리면서 '(3/4)' 같은
 // 문구를 손으로 고치지 않게 한다(고치는 것을 잊으면 4/4 뒤에 5단계가 더 돈다).
-const IMPORT_STEPS = 5
+const IMPORT_STEPS = 6
 
 export default function Archive({ session, onNavigate }) {
   const [items, setItems] = useState([])
@@ -52,6 +56,15 @@ export default function Archive({ session, onNavigate }) {
   const [spaceReady, setSpaceReady] = useState(null) // null=확인 중, false=열 없음
   // 조회에 붙일 값. 열이 없으면 null 이고, 그때는 조건 자체를 붙이지 않는다.
   const spaceFilter = spaceReady ? space : null
+
+  /* ── 계획 격자 ──────────────────────────────────────────────────────
+     🔴 공간과 **같은 구조**다: 열이 있는지 한 번 묻고(planReady), 없으면 탭을 숨기고
+        저장에도 계획 열을 보내지 않는다. 두 기능이 같은 규칙을 쓰면, SQL 을 반만
+        실행한 DB 에서도 어느 쪽이 접혔는지 한 가지 방법으로 설명된다.
+     🔴 영역(domain)은 계정에 하나다 — 서랍을 바꿔도 축은 그대로고 내용만 갈린다
+        (src/plan.js 머리말). 그래서 space 가 아니라 이 자리에 한 번만 받아 둔다. */
+  const [domains, setDomains] = useState(BUILTIN_DOMAINS)
+  const [planReady, setPlanReady] = useState(null) // null=확인 중, false=열 없음
 
   const [allCategories, setAllCategories] = useState([])
   const [slots, setSlots] = useState([])
@@ -79,6 +92,11 @@ export default function Archive({ session, onNavigate }) {
   const [view, setView] = useState(() => localStorage.getItem('archive-view') || 'grid')
   const [tab, setTab] = useState(() => localStorage.getItem('archive-tab') || 'today')
   const [refreshKey, setRefreshKey] = useState(0)
+
+  /* 실제로 그릴 탭. 🔴 '계획' 을 마지막으로 보던 기기에서 SQL 을 아직 실행하지 않은
+     DB 에 붙으면, 기억해 둔 탭이 열 수 없는 탭이 된다 — 그때는 빈 화면 대신 오늘로 간다.
+     기억 자체는 지우지 않는다: SQL 을 실행하고 다시 열면 보던 자리로 돌아온다. */
+  const activeTab = (tab === 'plan' && planReady === false) ? 'today' : tab
 
   /* ── 모션 ────────────────────────────────────────────────────────────
      🔴 '무엇이 새로 들어왔나' 는 목록 전체를 아는 이 자리만 알 수 있다. 카드가 각자
@@ -331,7 +349,17 @@ export default function Archive({ session, onNavigate }) {
     setSpace((cur) => (rows.some((s) => s.key === cur) ? cur : (rows[0]?.key ?? DEFAULT_SPACE)))
   }, [userId])
 
+  // 계획 열이 있는지 한 번 물어보고, 있으면 영역 목록을 받는다.
+  const loadPlanAxis = useCallback(async () => {
+    const ok = await probePlanColumns()
+    setPlanReady(ok)
+    if (!ok) return
+    const { domains: rows } = await loadDomains(userId)
+    setDomains(rows)
+  }, [userId])
+
   useEffect(() => { loadSpaceList() }, [loadSpaceList])
+  useEffect(() => { loadPlanAxis() }, [loadPlanAxis])
   useEffect(() => { writeSpacePref(userId, space) }, [userId, space])
 
   useEffect(() => { loadCategories() }, [loadCategories])
@@ -389,6 +417,30 @@ export default function Archive({ session, onNavigate }) {
       setTodoCount((c) => Math.max(0, next === 'done' ? c + 1 : c - 1))
       toast.error('완료 상태를 저장하지 못했어요')
     }
+  }, [toast])
+
+  /* 아카이브 카드에서 바로 격자에 올린다 (요구사항 5).
+     🔴 상태는 언제나 '계획'(planned)에서 시작한다. 목록에서 올리는 순간에 '진행 중' 을
+        고르게 하면 고를 것이 하나 더 늘고, 실제로 시작하는 것은 격자에서 하는 일이다.
+     🔴 plan_status_at 을 함께 찍는다 — 이 시각이 없으면 방금 올린 계획이 주간 리뷰에서
+        '만든 지 오래된 정체' 로 잡힐 수 있다(plan.js planStatusAt 참고). */
+  const putOnPlan = useCallback(async (item, { horizon, domain }) => {
+    const at = new Date().toISOString()
+    const patch = {
+      horizon,
+      domain: domain || null,
+      plan_status: DEFAULT_PLAN_STATUS,
+      plan_status_at: at
+    }
+    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, ...patch } : i)))
+    const { error } = await supabase.from('items').update(patch).eq('id', item.id)
+    if (error) {
+      setItems((prev) => prev.map((i) => (i.id === item.id ? item : i)))
+      toast.error('계획 격자에 올리지 못했어요')
+      return
+    }
+    toast.success('계획 격자에 올렸어요')
+    setRefreshKey((k) => k + 1) // 오늘 탭의 계획 한 줄도 같이 움직인다
   }, [toast])
 
   // 좌상단 로고 = 홈. 검색·필터를 모두 지우고 기본 탭으로 돌아간 뒤 다시 읽어 온다.
@@ -542,6 +594,16 @@ export default function Archive({ session, onNavigate }) {
         console.warn('[백업] 공간 목록을 읽지 못했습니다(표가 아직 없을 수 있음):', err)
       }
 
+      /* 계획 영역도 같은 이유로 담는다. 항목의 domain 열은 **열쇠**만 들고 있어서,
+         이 표가 빠지면 복원한 뒤 '건강' 이 'health' 라는 이름 없는 줄이 된다 —
+         공간(spaces)에서 이미 한 번 겪은 자리다. */
+      let allDomains = []
+      try {
+        allDomains = await fetchAllRows('plan_domains')
+      } catch (err) {
+        console.warn('[백업] 계획 영역을 읽지 못했습니다(표가 아직 없을 수 있음):', err)
+      }
+
       const payload = {
         exported_at: new Date().toISOString(),
         // 첨부 파일은 '메타만' 들어간다. 파일 실체를 JSON 에 담으면(base64) 25MB 짜리
@@ -557,6 +619,7 @@ export default function Archive({ session, onNavigate }) {
         categories: allCategories,
         time_slots: allSlots,
         spaces: allSpaces,
+        plan_domains: allDomains,
         item_categories: allLinks
       }
 
@@ -627,11 +690,13 @@ export default function Archive({ session, onNavigate }) {
     // time_slots·spaces 는 나중에 추가된 항목이라 옛 백업에는 없다. 없으면 그냥 건너뛴다.
     const backupSlots = Array.isArray(backup.time_slots) ? backup.time_slots : []
     const backupSpaces = Array.isArray(backup.spaces) ? backup.spaces : []
+    const backupDomains = Array.isArray(backup.plan_domains) ? backup.plan_domains : []
 
     const proceed = window.confirm(
       `백업의 항목 ${backup.items.length}개, 카테고리 ${backup.categories.length}개`
       + (backupSlots.length > 0 ? `, 시간대 ${backupSlots.length}개` : '')
       + (backupSpaces.length > 0 ? `, 공간 ${backupSpaces.length}개` : '')
+      + (backupDomains.length > 0 ? `, 계획 영역 ${backupDomains.length}개` : '')
       + '를 가져올까요? '
       + '기존 데이터는 삭제되지 않고, 같은 id의 데이터는 백업 내용으로 덮어써집니다.'
     )
@@ -668,12 +733,29 @@ export default function Archive({ session, onNavigate }) {
         }
       }
 
-      stage = '항목'
+      /* 계획 영역도 공간과 같다 — **깨져도 복원을 멈추지 않는다.** 표가 아직 없는
+         DB 에서 여기서 던지면 항목이 통째로 복원되지 않는다. 영역 이름이 없으면
+         격자에서 '미지정' 줄에 모일 뿐, 자료는 그대로다. */
+      stage = '계획 영역'
       setImportStep(4)
+      if (backupDomains.length > 0) {
+        try {
+          await upsertChunked(
+            'plan_domains',
+            backupDomains.map((d) => ({ ...d, user_id: uid })),
+            'user_id,key'
+          )
+        } catch (err) {
+          console.warn('[복원] 계획 영역을 넣지 못했습니다(표가 아직 없을 수 있음):', err)
+        }
+      }
+
+      stage = '항목'
+      setImportStep(5)
       await upsertChunked('items', backup.items.map((i) => ({ ...i, user_id: uid })))
 
       stage = '카테고리 소속'
-      setImportStep(5)
+      setImportStep(6)
       await upsertChunked(
         'item_categories',
         backup.item_categories.map((r) => ({
@@ -689,6 +771,7 @@ export default function Archive({ session, onNavigate }) {
       loadCategories()
       loadSlots() // 복원된 시간대를 '오늘' 탭이 바로 쓰도록
       loadSpaceList() // 복원된 공간 이름·아이콘을 전환기가 바로 쓰도록
+      loadPlanAxis()  // 복원된 계획 영역을 격자가 바로 쓰도록
       refresh()
     } catch (err) {
       console.error(err)
@@ -812,23 +895,38 @@ export default function Archive({ session, onNavigate }) {
       {spaceReady === false && (
         <p className="space-note" role="status">{SPACE_COLUMN_MESSAGE}</p>
       )}
+      {/* 🔴 공간 쪽이 이미 같은 말을 하고 있으면 두 번 적지 않는다. 둘 다 setup.sql 한 번으로
+          해결되는 일이라, 줄이 두 개면 할 일이 두 개인 것처럼 읽힌다. */}
+      {planReady === false && spaceReady !== false && (
+        <p className="space-note" role="status">{PLAN_COLUMN_MESSAGE}</p>
+      )}
 
       <div className="tabs" role="tablist" aria-label="화면 전환">
         <button
           role="tab"
-          aria-selected={tab === 'today'}
-          className={`tab ${tab === 'today' ? 'tab-on' : ''}`}
+          aria-selected={activeTab === 'today'}
+          className={`tab ${activeTab === 'today' ? 'tab-on' : ''}`}
           onClick={() => setTab('today')}
         >☀️ 오늘</button>
+        {/* 계획 탭은 열이 있을 때만 나온다. 눌러 봐야 빈 화면인 탭을 두면
+            '기능이 고장 났다' 로 읽힌다 (공간 전환기와 같은 규칙). */}
+        {planReady && (
+          <button
+            role="tab"
+            aria-selected={activeTab === 'plan'}
+            className={`tab ${activeTab === 'plan' ? 'tab-on' : ''}`}
+            onClick={() => setTab('plan')}
+          >🧭 계획</button>
+        )}
         <button
           role="tab"
-          aria-selected={tab === 'archive'}
-          className={`tab ${tab === 'archive' ? 'tab-on' : ''}`}
+          aria-selected={activeTab === 'archive'}
+          className={`tab ${activeTab === 'archive' ? 'tab-on' : ''}`}
           onClick={() => setTab('archive')}
         >🗂 아카이브</button>
       </div>
 
-      {tab === 'archive' && (
+      {activeTab === 'archive' && (
       <div className="search-row">
         <div className="search-box">
           <span className="search-icon" aria-hidden="true">⌕</span>
@@ -894,20 +992,35 @@ export default function Archive({ session, onNavigate }) {
       </p>
 
       {/* 목록과 같은 이유로, 어느 서랍인지 알기 전에는 '오늘' 도 그리지 않는다 */}
-      {tab === 'today' && spaceReady !== null && (
+      {activeTab === 'today' && spaceReady !== null && (
         <Today
           categories={categories}
           slots={slots}
           userId={session.user.id}
           space={spaceFilter}
+          planReady={!!planReady}
           refreshKey={refreshKey}
           onOpen={(item) => setModalItem(item)}
           onChanged={refresh}
           onSlotsChanged={loadSlots}
+          onGoPlan={() => setTab('plan')}
         />
       )}
 
-      {tab === 'archive' && (<>
+      {/* 계획도 같은 규칙이다 — 어느 서랍인지 알기 전에는 그리지 않는다.
+          격자에 다른 서랍의 계획이 잠깐이라도 스치면 나눈 의미가 없다. */}
+      {activeTab === 'plan' && spaceReady !== null && (
+        <Plan
+          domains={domains}
+          space={spaceFilter}
+          userId={session.user.id}
+          refreshKey={refreshKey}
+          onOpen={(item) => setModalItem(item)}
+          onChanged={refresh}
+        />
+      )}
+
+      {activeTab === 'archive' && (<>
 
       {recentTags.length > 0 && (
         <div className="tag-row">
@@ -1021,6 +1134,8 @@ export default function Archive({ session, onNavigate }) {
                 onStar={toggleStar}
                 onDone={toggleDone}
                 onTag={toggleTag}
+                domains={planReady ? domains : null}
+                onPlan={planReady ? putOnPlan : null}
                 enter={fresh}
                 delay={staggerDelay(i)}
                 saved={item.id === savedId}
@@ -1059,6 +1174,7 @@ export default function Archive({ session, onNavigate }) {
           slots={slots}
           spaces={spaceReady ? spaces : null}
           space={spaceFilter}
+          domains={planReady ? domains : null}
           userId={session.user.id}
           onClose={() => setModalItem(undefined)}
           onSaved={(warn, savedItemId) => {
@@ -1096,6 +1212,8 @@ export default function Archive({ session, onNavigate }) {
           spaces={spaceReady ? spaces : null}
           space={spaceFilter}
           onSpacesChanged={loadSpaceList}
+          domains={planReady ? domains : null}
+          onDomainsChanged={loadPlanAxis}
           onOpenPricing={() => { setSettingsOpen(false); onNavigate('/pricing') }}
           onLockChanged={syncLockCfg}
           onClose={() => setSettingsOpen(false)}

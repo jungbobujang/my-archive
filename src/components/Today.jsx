@@ -1,6 +1,7 @@
 // '오늘' 탭. 오늘 할 것(시간대별) · 예정 · 미분류 · 최근 저장 네 묶음을 보여준다.
 import { useCallback, useEffect, useState } from 'react'
 import { supabase, fetchAllRows, ymd } from '../supabase.js'
+import { isDoneThisWeek, isStalled } from '../plan.js'
 import SlotManager from './SlotManager.jsx'
 import { SkeletonRows } from './Skeleton.jsx'
 import { useToast } from './Toast.jsx'
@@ -43,8 +44,14 @@ function Badges({ item, categories, itemCats }) {
 }
 
 // space 가 null 이면 공간 열이 아직 없는 DB 다 — 그때는 조건을 붙이지 않는다.
-export default function Today({ categories, slots, userId, space, refreshKey, onOpen, onChanged, onSlotsChanged }) {
+// planReady 가 거짓이면 계획 열이 아직 없는 DB 라, 맨 위 한 줄을 통째로 접는다.
+export default function Today({
+  categories, slots, userId, space, planReady, refreshKey,
+  onOpen, onChanged, onSlotsChanged, onGoPlan
+}) {
   const toast = useToast()
+  // { doing, weekDone, stalled } — 맨 위 한 줄이 쓰는 값 (요구사항 7)
+  const [planSum, setPlanSum] = useState(null)
   const [todos, setTodos] = useState([])
   const [upcoming, setUpcoming] = useState([])
   const [slotOpen, setSlotOpen] = useState(false)
@@ -117,6 +124,26 @@ export default function Today({ categories, slots, userId, space, refreshKey, on
         }
       }
 
+      /* 4) 계획 한 줄 — 진행 중 N · 이번 주 완료 N (요구사항 7).
+         🔴 '이번 주' 를 조회에서만 자르지 않고 받아 온 뒤 한 번 더 센다. 주의 시작은
+            월요일 0시라 서버가 아니라 **보는 사람의 달력**이 정하는 값이고, 조회의
+            gte 는 그 경계를 대강 좁히는 역할만 한다 (plan.js weekStart 참고). */
+      if (planReady) {
+        const { data: planRows, error: planErr } = await inSpace(supabase
+          .from('items').select('id, plan_status, plan_status_at, created_at')
+          .is('deleted_at', null))
+          .not('plan_status', 'is', null)
+        if (planErr) throw planErr
+        const rows = planRows ?? []
+        setPlanSum({
+          doing: rows.filter((r) => r.plan_status === 'doing').length,
+          weekDone: rows.filter((r) => isDoneThisWeek(r)).length,
+          stalled: rows.filter((r) => isStalled(r)).length
+        })
+      } else {
+        setPlanSum(null)
+      }
+
       setTodos(todoRows ?? [])
       setUpcoming(upcomingRows ?? [])
       setUncat(uncatRows)
@@ -128,7 +155,7 @@ export default function Today({ categories, slots, userId, space, refreshKey, on
       toast.error('오늘 화면을 불러오지 못했어요. 연결 상태를 확인해 주세요')
     }
     setLoading(false)
-  }, [toast, space])
+  }, [toast, space, planReady])
 
   useEffect(() => { load() }, [load, refreshKey])
 
@@ -184,6 +211,21 @@ export default function Today({ categories, slots, userId, space, refreshKey, on
   return (
     <div className="today">
       <p className="today-date">{todayLabel()}</p>
+
+      {/* 계획 한 줄. 🔴 **숫자 두 개만** 적는다 — 오늘 탭의 주인공은 오늘 할 일이고,
+          이 줄은 '계획 쪽은 지금 이렇다' 를 흘깃 보여 주고 격자로 보내는 문이다.
+          계획이 하나도 없으면 줄 자체를 두지 않는다(0 · 0 은 알려 주는 것이 없다). */}
+      {planSum && (planSum.doing > 0 || planSum.weekDone > 0) && (
+        <button type="button" className="plan-strip" onClick={onGoPlan}>
+          <span className="plan-strip-main">
+            🧭 진행 중 <b>{planSum.doing}</b> · 이번 주 완료 <b>{planSum.weekDone}</b>
+            {planSum.stalled > 0 && (
+              <span className="plan-strip-warn"> · 멈춘 것 {planSum.stalled}</span>
+            )}
+          </span>
+          <span className="plan-strip-go" aria-hidden="true">계획 보기 ›</span>
+        </button>
+      )}
 
       <section className="today-section">
         <h2 className="today-head">

@@ -12,6 +12,7 @@
     "check:files": "node scripts/check-files.mjs",
     "check:mobile": "node scripts/check-mobile.mjs",
     "check:space": "node scripts/check-space.mjs",
+    "check:plan": "node scripts/check-plan.mjs",
     "check:share": "node scripts/check-share.mjs"
   },
   "dependencies": {

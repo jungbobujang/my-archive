@@ -17,9 +17,125 @@ import {
   stripInvisibleAll, saveErrorMessage, byteLength, DRAFT_DEBOUNCE_MS, DRAFT_MAX_BYTES
 } from '../supabase.js'
 import { DEFAULT_SPACE, spaceOf, findSpace } from '../spaces.js'
+import {
+  HORIZONS, PLAN_STATUSES, DEFAULT_HORIZON, DEFAULT_PLAN_STATUS, MAX_RELATED,
+  isPlan, horizonOf, parseRelatedIds, planFields
+} from '../plan.js'
 import { useEscapeKey, confirmDiscard, draftKeyFor, readDraft, writeDraft, clearDraft } from '../hooks.js'
 import { useOptionalToast } from './Toast.jsx'
 import ShareDialog from './ShareDialog.jsx'
+
+/* 관련 항목 고르기 — '이 계획이 어느 기록에서 나왔나' 를 적는 자리 (요구사항 6).
+ *
+ * 🔴 검색해서 고른다. 전체 목록을 늘어놓지 않는 이유는, 아카이브가 수백 개가 되는 자리라
+ *    목록이 곧 스크롤이 되기 때문이다. 찾으려는 것의 이름은 대개 알고 있다.
+ * 🔴 **이미 붙어 있는 것과 자기 자신은 결과에서 뺀다.** 자기 자신을 관련 항목으로 걸면
+ *    카드에 🔗1 이 뜨는데 눌러 봐야 제자리다.
+ * 🔴 고른 것의 제목은 따로 받아 온다 — related_ids 에는 id 만 있어서(plan.js 참고),
+ *    제목을 모르면 '연결 3개' 라고만 적게 되고 그건 무엇이 걸렸는지 알려 주지 않는다.
+ */
+function RelatedPicker({ selfId, space, ids, onChange, busy }) {
+  const [query, setQuery] = useState('')
+  const [found, setFound] = useState([])
+  const [titles, setTitles] = useState({})   // id -> 제목
+  const [searching, setSearching] = useState(false)
+
+  // 고른 것들의 제목. 붙어 있는 id 가 바뀔 때만 받아 온다.
+  useEffect(() => {
+    if (ids.length === 0) { setTitles({}); return undefined }
+    let alive = true
+    ;(async () => {
+      const { data } = await supabase.from('items').select('id, title').in('id', ids)
+      if (!alive) return
+      const map = {}
+      for (const r of data ?? []) map[r.id] = r.title
+      setTitles(map)
+    })()
+    return () => { alive = false }
+  }, [ids.join(' ')])
+
+  // 검색은 입력이 멈춘 뒤에 한 번만 (초안 저장과 같은 박자다)
+  useEffect(() => {
+    const clean = query.trim()
+    if (!clean) { setFound([]); return undefined }
+    let alive = true
+    const timer = setTimeout(async () => {
+      setSearching(true)
+      let q = supabase.from('items').select('id, title').is('deleted_at', null)
+      if (space) q = q.eq('space', space)
+      const { data } = await q.ilike('title', `%${clean}%`).range(0, 9)
+      if (!alive) return
+      setFound((data ?? []).filter((r) => r.id !== selfId && !ids.includes(r.id)))
+      setSearching(false)
+    }, DRAFT_DEBOUNCE_MS)
+    return () => { alive = false; clearTimeout(timer) }
+  }, [query, space, selfId, ids.join(' ')])
+
+  function add(row) {
+    if (ids.length >= MAX_RELATED) return
+    onChange([...ids, row.id])
+    setTitles((prev) => ({ ...prev, [row.id]: row.title }))
+    setQuery('')
+    setFound([])
+  }
+
+  return (
+    <div className="plan-field">
+      <span className="plan-field-label">
+        관련 항목 {ids.length > 0 && `(${ids.length}/${MAX_RELATED})`}
+      </span>
+
+      {ids.length > 0 && (
+        <ul className="link-list">
+          {ids.map((id) => (
+            <li className="link-row" key={id}>
+              {/* 제목을 아직 못 받았거나 항목이 지워졌으면 그렇게 적는다 —
+                  빈칸으로 두면 줄이 왜 있는지 알 수 없다. */}
+              <span className="plan-rel-name">🔗 {titles[id] ?? '(불러오는 중…)'}</span>
+              <button
+                type="button"
+                className="link-x"
+                onClick={() => onChange(ids.filter((x) => x !== id))}
+                aria-label="관련 항목 빼기"
+                disabled={busy}
+              >✕</button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <input
+        className="plan-rel-search"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder={ids.length >= MAX_RELATED
+          ? `관련 항목은 최대 ${MAX_RELATED}개까지예요`
+          : '관련된 기록 제목으로 검색'}
+        aria-label="관련 항목 검색"
+        disabled={busy || ids.length >= MAX_RELATED}
+      />
+
+      {query.trim() && (
+        <ul className="plan-rel-results">
+          {searching && <li className="plan-rel-none">찾는 중…</li>}
+          {!searching && found.length === 0 && (
+            <li className="plan-rel-none">맞는 항목이 없어요</li>
+          )}
+          {found.map((r) => (
+            <li key={r.id}>
+              <button type="button" className="plan-rel-hit" onClick={() => add(r)}>
+                + {r.title}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="field-note">
+        어느 아이디어에서 나온 계획인지 걸어 두면, 격자 카드에 🔗 개수로 표시됩니다.
+      </p>
+    </div>
+  )
+}
 
 // youtu.be/abc123 형태로 줄인다.
 // 물음표 뒤(?v=...)까지 남기는 이유: 유튜브 링크는 경로가 전부 /watch 라
@@ -74,7 +190,10 @@ function isMissingFilesColumn(err) {
 // categories 에는 **전 공간의 카테고리**가 들어온다. 다른 공간으로 옮기는 순간
 // 그 공간의 카테고리를 보여 줘야 하기 때문이다 — 아래 spaceCategories 가 걸러 쓴다.
 // spaces 가 null 이면 공간 열이 아직 없는 DB 라, 공간 칸을 통째로 접는다.
-export default function ItemModal({ item, categories, slots, spaces, space, userId, onClose, onSaved }) {
+// domains 가 null 이면 계획 열이 아직 없는 DB 라, 계획 칸도 같은 규칙으로 접는다.
+export default function ItemModal({
+  item, categories, slots, spaces, space, domains, userId, onClose, onSaved
+}) {
   const isEdit = !!item
   // 저장 실패는 모달 안의 한 줄(.form-error)만으로는 놓치기 쉽다 — 저장에 성공하면 모달이
   // 닫히고, 실패해도 긴 폼에서는 그 줄이 화면 밖에 있을 수 있다. 그래서 토스트도 함께 띄운다.
@@ -97,6 +216,20 @@ export default function ItemModal({ item, categories, slots, spaces, space, user
     draft?.space ?? (item ? spaceOf(item) : (space ?? DEFAULT_SPACE))
   )
   const [status, setStatus] = useState(draft?.status ?? item?.status ?? 'none')
+
+  /* ── 계획 ────────────────────────────────────────────────────────────
+     🔴 **기본은 계획 아님**이다 (요구사항 5). 적어 두는 것과 계획하는 것은 다른 일이고,
+        새 항목마다 지평을 고르라고 물으면 메모 한 줄 남기는 일이 설문이 된다.
+     🔴 items.status(보관용/할 것/완료)와 **다른 축**이다. 저쪽은 '오늘 할 일인가',
+        이쪽은 '이 계획이 어디까지 왔나' — 자세한 이유는 src/plan.js 머리말에 있다. */
+  const [isPlanned, setIsPlanned] = useState(draft?.isPlanned ?? isPlan(item))
+  const [horizon, setHorizon] = useState(draft?.horizon ?? (isPlan(item) ? horizonOf(item) : DEFAULT_HORIZON))
+  const [planDomain, setPlanDomain] = useState(draft?.planDomain ?? item?.domain ?? null)
+  const [planStatus, setPlanStatus] = useState(
+    draft?.planStatus ?? (isPlan(item) ? item.plan_status : DEFAULT_PLAN_STATUS)
+  )
+  const [relatedIds, setRelatedIds] = useState(draft?.relatedIds ?? parseRelatedIds(item?.related_ids))
+
   const [dueDate, setDueDate] = useState(draft?.dueDate ?? item?.due_date ?? '')
   const [slotId, setSlotId] = useState(draft?.slotId ?? item?.slot_id ?? null)
   // 링크는 목록으로 들고 있다. linkInput 은 아직 목록에 담기지 않은, 지금 치고 있는 한 줄.
@@ -254,6 +387,14 @@ export default function ItemModal({ item, categories, slots, spaces, space, user
       slotId !== (item?.slot_id ?? null) ||
       // 옮기기도 '바뀜' 이다 — 서랍만 바꾸고 Esc 를 눌렀을 때 말없이 사라지면 안 된다
       itemSpace !== (item ? spaceOf(item) : (space ?? DEFAULT_SPACE)) ||
+      // 격자에 올리고 내리는 것도 '바뀜' 이다 — 켜 두고 Esc 를 눌렀을 때 말없이 사라지면 안 된다
+      isPlanned !== isPlan(item) ||
+      (isPlanned && (
+        horizon !== (isPlan(item) ? horizonOf(item) : DEFAULT_HORIZON) ||
+        (planDomain ?? null) !== (item?.domain ?? null) ||
+        planStatus !== (isPlan(item) ? item.plan_status : DEFAULT_PLAN_STATUS) ||
+        relatedIds.join(' ') !== parseRelatedIds(item?.related_ids).join(' ')
+      )) ||
       joinImages(imgs) !== joinImages(savedImages) ||
       !sameSet(categoryIds, baseCategoryIds)
     )
@@ -266,7 +407,8 @@ export default function ItemModal({ item, categories, slots, spaces, space, user
   function draftBody(imgs) {
     return {
       title, content, links, linkInput, tagsText, categoryIds, status, dueDate, slotId,
-      space: itemSpace, images: imgs, splitMode
+      space: itemSpace, images: imgs, splitMode,
+      isPlanned, horizon, planDomain, planStatus, relatedIds
     }
   }
 
@@ -303,7 +445,7 @@ export default function ItemModal({ item, categories, slots, spaces, space, user
       writeDraft(draftKey, draftBody(images))
     }, DRAFT_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [draftKey, dirty, title, content, links, linkInput, tagsText, categoryIds, status, dueDate, slotId, itemSpace, images, splitMode])
+  }, [draftKey, dirty, title, content, links, linkInput, tagsText, categoryIds, status, dueDate, slotId, itemSpace, images, splitMode, isPlanned, horizon, planDomain, planStatus, relatedIds])
 
   // 저장하지 않고 닫을 때: 이번에 올려 둔 이미지·파일을 스토리지에서 지운다.
   //
@@ -369,6 +511,11 @@ export default function ItemModal({ item, categories, slots, spaces, space, user
     setDueDate(item?.due_date ?? '')
     setSlotId(item?.slot_id ?? null)
     setItemSpace(item ? spaceOf(item) : (space ?? DEFAULT_SPACE))
+    setIsPlanned(isPlan(item))
+    setHorizon(isPlan(item) ? horizonOf(item) : DEFAULT_HORIZON)
+    setPlanDomain(item?.domain ?? null)
+    setPlanStatus(isPlan(item) ? item.plan_status : DEFAULT_PLAN_STATUS)
+    setRelatedIds(parseRelatedIds(item?.related_ids))
     setImages(parseImages(item?.image_url))
     setFiles(parseFiles(item?.files))
     setSplitMode(false)
@@ -631,6 +778,19 @@ export default function ItemModal({ item, categories, slots, spaces, space, user
       slot_id: status === 'todo' ? slotId : null,
       // 공간 열이 없는 DB 에는 **보내지 않는다** — 없는 열을 보내면 저장이 통째로 튕긴다
       ...(spaces ? { space: itemSpace } : {}),
+      /* 계획 열도 같은 규칙이다. 다만 열이 있을 때는 '계획 아님' 도 **명시해서 보낸다** —
+         격자에서 내린 항목의 payload 에서 열을 빼면 update 가 그 열을 그대로 두어,
+         내린 줄 알았던 계획이 격자에 남는다 (src/plan.js planFields 머리말). */
+      ...(domains ? planFields({
+        isPlanned,
+        horizon,
+        domain: planDomain,
+        planStatus,
+        relatedIds,
+        // 상태가 실제로 바뀐 때에만 시각을 새로 찍는다. 제목만 고쳤는데 갱신되면
+        // 7일째 멈춰 있던 계획이 주간 리뷰의 정체 목록에서 빠져나간다.
+        statusChanged: !isPlan(item) || item.plan_status !== planStatus
+      }) : {}),
       user_id: userId
     }
   }
@@ -1057,6 +1217,95 @@ export default function ItemModal({ item, categories, slots, spaces, space, user
               </div>
             )}
           </>
+        )}
+
+        {/* 계획 격자에 올리기. 열이 없는 DB 에서는 통째로 숨는다 (공간 칸과 같은 규칙). */}
+        {domains && (
+          <div className="field">
+            계획
+            <label className="plan-toggle">
+              <input
+                type="checkbox"
+                checked={isPlanned}
+                onChange={(e) => setIsPlanned(e.target.checked)}
+                disabled={busy}
+                aria-label="계획으로"
+              />
+              <span>
+                계획으로
+                <small>
+                  {isPlanned
+                    ? '계획 탭의 격자에 올라갑니다'
+                    : '켜면 지평·영역을 골라 계획 격자에 올릴 수 있어요'}
+                </small>
+              </span>
+            </label>
+
+            {isPlanned && (
+              <div className="plan-fields">
+                <div className="plan-field">
+                  <span className="plan-field-label">지평</span>
+                  <div className="cat-select">
+                    {HORIZONS.map((h) => (
+                      <button
+                        key={h.key}
+                        type="button"
+                        className={`chip ${horizon === h.key ? 'chip-on' : ''}`}
+                        onClick={() => setHorizon(h.key)}
+                        aria-pressed={horizon === h.key}
+                        disabled={busy}
+                      >{h.name} <small>({h.sub})</small></button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="plan-field">
+                  <span className="plan-field-label">영역</span>
+                  <div className="cat-select">
+                    {domains.map((d) => (
+                      <button
+                        key={d.key}
+                        type="button"
+                        className={`chip chip-dot-${d.color ?? 'gray'} ${planDomain === d.key ? 'chip-on' : ''}`}
+                        /* 한 번 더 누르면 고른 것을 놓는다 — 영역 없이도 격자에 올라가고,
+                           그때는 '미지정' 줄에 모인다(Plan.jsx). 고르라고 막지 않는다. */
+                        onClick={() => setPlanDomain(planDomain === d.key ? null : d.key)}
+                        aria-pressed={planDomain === d.key}
+                        disabled={busy}
+                      >{d.name}</button>
+                    ))}
+                  </div>
+                  {!planDomain && (
+                    <p className="field-note">영역을 고르지 않으면 격자의 <b>미지정</b> 줄에 놓입니다.</p>
+                  )}
+                </div>
+
+                <div className="plan-field">
+                  <span className="plan-field-label">상태</span>
+                  <div className="cat-select">
+                    {PLAN_STATUSES.map((s) => (
+                      <button
+                        key={s.key}
+                        type="button"
+                        className={`chip ${planStatus === s.key ? 'chip-on' : ''}`}
+                        onClick={() => setPlanStatus(s.key)}
+                        aria-pressed={planStatus === s.key}
+                        disabled={busy}
+                      >{s.icon} {s.name}</button>
+                    ))}
+                  </div>
+                </div>
+
+                <RelatedPicker
+                  selfId={item?.id ?? null}
+                  space={spaces ? itemSpace : null}
+                  ids={relatedIds}
+                  onChange={setRelatedIds}
+                  busy={busy}
+                />
+              </div>
+            )}
+          </div>
         )}
 
         <label className="field">

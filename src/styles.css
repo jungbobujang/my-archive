@@ -2313,4 +2313,392 @@ a.card-thumb { cursor: pointer; }
   .card-saved { outline-color: var(--c-teal-mid); }
   .card, .img-thumb { transition: none !important; }
   .card:hover { transform: none !important; box-shadow: none !important; }
+  .plan-card, .plan-strip { transition: none !important; }
+}
+
+/* ---------- 계획 격자 (지평 × 영역) ----------
+   이 화면이 답하는 것은 둘이다: 지금 무엇을 벌여 놓았나, 그리고 **어디가 비었나**.
+   두 번째 때문에 빈 칸도 반드시 그리고 테두리를 남긴다 — 여백으로 두면 편중이 안 보인다. */
+
+.plan { margin-top: 4px; }
+
+.plan-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.plan-title { margin: 0; font-size: 17px; font-weight: 700; }
+.plan-sum { font-size: 12.5px; color: var(--ink-soft); }
+.plan-sum-warn { color: var(--c-amber-fg); font-weight: 650; }
+.plan-review-btn { margin-left: auto; flex: none; }
+
+/* 가로축 머리와 각 줄이 **같은 열 폭**을 쓴다. 축 칸 하나 + 지평 셋.
+   (줄 쪽은 셋을 안쪽 격자로 다시 나누는데, 간격을 같게 두면 열이 정확히 맞는다) */
+.plan-grid { --plan-axis: 104px; display: flex; flex-direction: column; gap: 10px; }
+
+.plan-grid-head {
+  display: grid;
+  grid-template-columns: var(--plan-axis) repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 2px 0 6px;
+  background: var(--bg);
+}
+.plan-col-head {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  padding-left: 2px;
+}
+.plan-col-head small { font-weight: 500; color: var(--ink-faint); }
+
+.plan-row {
+  display: grid;
+  grid-template-columns: var(--plan-axis) minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+.plan-row-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 0 0;
+  font-size: 13.5px;
+  font-weight: 650;
+  min-width: 0;
+}
+.plan-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-row-count {
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--ink-faint);
+  background: var(--c-gray-bg);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.plan-row-cells {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.plan-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  min-height: 74px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+/* 🔴 빈 칸은 **점선**이다. 색이 아니라 선의 성질로 가르면 색을 못 가리는 사람에게도
+   보이고, 흑백으로 인쇄해도 남는다. */
+.plan-cell-empty { background: transparent; border-style: dashed; }
+
+.plan-cell-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+/* 넓은 화면에서는 지평 이름이 가로축 머리에 이미 있다 — 칸마다 또 적으면 같은 말이 두 번이다 */
+.plan-cell-when { display: none; }
+.plan-cell-count { margin-left: auto; font-weight: 700; }
+.plan-cell-none { margin: 0; font-size: 11.5px; color: var(--ink-faint); }
+
+/* ── 계획 카드 ────────────────────────────────────────────────── */
+.plan-card-box { position: relative; }
+/* 🔴 button 자신은 flex 컨테이너가 아니다. 크롬에서 button 을 flex 로 두면 안쪽 내용이
+   최대 너비로 굳어, 좁은 칸에서 긴 제목이 말줄임 없이 칸 밖으로 샌다(375px 점검에서
+   잡혔다). 가로 배치는 안쪽 .plan-card-row 가 맡는다. */
+.plan-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 8px 7px 10px;
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  /* 왼쪽 띠가 두 가지를 한 번에 말한다: 색은 영역, 굵기는 진행 여부 */
+  border-left: 3px solid var(--c-gray-mid);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  /* 길게 누르는 자리라, 브라우저가 글자를 잡거나 확대경을 띄우지 않게 한다 */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.plan-card:hover { border-color: var(--ink-faint); }
+.plan-card-doing { border-left-width: 6px; font-weight: 600; }
+.plan-card-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+.plan-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan-card-marks { flex: none; display: flex; gap: 4px; font-size: 10.5px; color: var(--ink-faint); }
+.plan-card-stalled .plan-card-stall { color: var(--c-amber-fg); }
+
+.plan-card-purple { border-left-color: var(--c-purple-mid); }
+.plan-card-coral  { border-left-color: var(--c-coral-mid); }
+.plan-card-teal   { border-left-color: var(--c-teal-mid); }
+.plan-card-gray   { border-left-color: var(--c-gray-mid); }
+.plan-card-blue   { border-left-color: var(--c-blue-mid); }
+.plan-card-amber  { border-left-color: var(--c-amber-mid); }
+.plan-card-pink   { border-left-color: var(--c-pink-mid); }
+.plan-card-green  { border-left-color: var(--c-green-mid); }
+
+/* 상태 전환 메뉴 — 카드 바로 아래에 뜬다 */
+.plan-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  min-width: 128px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-menu);
+}
+.plan-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 10px;
+  font-size: 12.5px;
+  text-align: left;
+  color: var(--ink);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.plan-menu-item:hover { background: var(--c-gray-bg); }
+.plan-menu-icon { color: var(--ink-faint); }
+.plan-menu-open { border-top: 1px solid var(--line); border-radius: 0; }
+
+/* ── 완료 접힌 목록 · 안내 ────────────────────────────────────── */
+.plan-note {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--ink-soft);
+  background: var(--c-gray-bg);
+  border-radius: var(--radius);
+  padding: 9px 12px;
+}
+.plan-done { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 12px; }
+.plan-done-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 0;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ink-soft);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.plan-done-list { list-style: none; margin: 6px 0 0; padding: 0; }
+.plan-done-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.plan-done-row:last-child { border-bottom: none; }
+/* 끝난 일이라 목록에서 한 발 물러나 있는다 — 지운 것이 아니므로 흐리게만 한다 */
+.plan-done-row .today-title { color: var(--ink-soft); }
+
+/* 주간 리뷰의 빈 칸 목록 */
+.plan-empty-list { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.plan-empty-list li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+}
+.plan-empty-when { font-size: 11.5px; color: var(--ink-faint); }
+
+/* ── 오늘 탭의 계획 한 줄 ─────────────────────────────────────── */
+.plan-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  font-size: 13px;
+  text-align: left;
+  color: var(--ink);
+  background: var(--accent-soft);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.plan-strip:hover { border-color: var(--accent); }
+.plan-strip-main { flex: 1 1 auto; min-width: 0; }
+.plan-strip-warn { color: var(--c-amber-fg); }
+.plan-strip-go { flex: none; font-size: 12px; color: var(--accent); font-weight: 650; }
+
+/* ── 항목 모달의 계획 칸 ──────────────────────────────────────── */
+.plan-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 0;
+  cursor: pointer;
+  font-weight: 400;
+}
+.plan-toggle input { flex: none; margin-top: 2px; }
+.plan-toggle small { display: block; font-size: 11.5px; color: var(--ink-faint); font-weight: 400; }
+.plan-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.plan-field { display: flex; flex-direction: column; gap: 6px; }
+.plan-field-label { font-size: 12px; font-weight: 650; color: var(--ink-soft); }
+.plan-rel-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.plan-rel-search { width: 100%; }
+.plan-rel-results {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 168px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.plan-rel-hit {
+  display: block;
+  width: 100%;
+  padding: 8px 9px;
+  font-size: 12.5px;
+  text-align: left;
+  color: var(--ink);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.plan-rel-hit:hover { background: var(--c-gray-bg); }
+.plan-rel-none { padding: 8px 9px; font-size: 12.5px; color: var(--ink-faint); }
+
+/* 영역 고르개의 색 점. 이름이 함께 있으므로 점은 이름을 거드는 표시이지
+   색만으로 고르게 만드는 유일한 단서가 아니다. */
+.chip-dot-purple::before, .chip-dot-coral::before, .chip-dot-teal::before,
+.chip-dot-gray::before, .chip-dot-blue::before, .chip-dot-amber::before,
+.chip-dot-pink::before, .chip-dot-green::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.chip-dot-purple::before { background: var(--c-purple-mid); }
+.chip-dot-coral::before  { background: var(--c-coral-mid); }
+.chip-dot-teal::before   { background: var(--c-teal-mid); }
+.chip-dot-gray::before   { background: var(--c-gray-mid); }
+.chip-dot-blue::before   { background: var(--c-blue-mid); }
+.chip-dot-amber::before  { background: var(--c-amber-mid); }
+.chip-dot-pink::before   { background: var(--c-pink-mid); }
+.chip-dot-green::before  { background: var(--c-green-mid); }
+
+/* ── 아카이브 카드에서 바로 올리기 ────────────────────────────── */
+.card-body { position: relative; }
+.plan-mini { font-size: 10.5px; }
+.plan-quick {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-menu);
+}
+.plan-quick-head { margin: 0; font-size: 12.5px; font-weight: 700; }
+.plan-quick-row { display: flex; flex-direction: column; gap: 5px; }
+.plan-quick-foot { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* ---------- 계획 격자: 좁은 화면 ----------
+   🔴 세로축이 **섹션**이 되고, 그 안에서 지평 셋은 가로로 남는다. 지평까지 세로로 쌓으면
+      줄이 스물넷이 되어 격자가 아니라 목록이 된다 — 그러면 '어디가 비었나' 를 한눈에
+      보는 일이 다시 스크롤이 된다.
+   🔴 접힘 상태는 JS 가 든다(src/hooks.js useNarrow). CSS 로만 접으면 폰에서 접어 둔 것이
+      넓은 화면에서도 사라져 보인다. */
+.plan-grid-narrow .plan-row { display: block; }
+.plan-grid-narrow .plan-row-cells { gap: 6px; margin-top: 6px; }
+.plan-grid-narrow .plan-cell { padding: 6px; min-height: 60px; }
+/* 좁은 화면에는 가로축 머리가 없으므로, 칸마다 지평 이름을 적는다 */
+.plan-grid-narrow .plan-cell-when { display: inline; }
+.plan-grid-narrow .plan-cell-head { font-size: 10.5px; }
+.plan-grid-narrow .plan-card { padding: 8px 6px; font-size: 11.5px; }
+.plan-grid-narrow .plan-card-marks { font-size: 10px; }
+
+.plan-row-toggle {
+  width: 100%;
+  /* 한 손가락으로 누르는 자리라 44px 급을 준다 */
+  min-height: 44px;
+  padding: 10px 2px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  color: var(--ink);
+}
+.plan-row-caret { margin-left: auto; color: var(--ink-faint); }
+/* 접힌 줄은 칸이 통째로 없으므로 아래 여백만 남긴다 */
+.plan-row-shut { padding-bottom: 2px; }
+
+@media (max-width: 639px) {
+  .plan-head { gap: 6px; }
+  /* 메뉴가 카드 오른쪽 끝에서 화면 밖으로 나가지 않게 한다 */
+  .plan-menu { left: auto; right: 0; min-width: 120px; }
 }

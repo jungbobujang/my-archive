@@ -222,6 +222,87 @@ where id = 'archive-files';
 
 ---
 
+### 🔴 계획 격자 (plan) — **실행 필요**
+
+`supabase/setup.sql` 전체를 SQL Editor 에 다시 붙여넣고 Run 하세요.
+여러 번 실행해도 안전합니다. 이번에 늘어난 것은 **표 하나 + items 열 다섯 + 제약 둘 + 인덱스 하나**입니다.
+
+```sql
+-- ① 계획 격자의 세로축(영역). 가로축(단기·중기·장기)은 코드 상수라 표가 없습니다.
+create table if not exists public.plan_domains (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  key text not null,
+  name text not null,
+  color text default 'gray',
+  position int default 0,
+  created_at timestamptz default now(),
+  primary key (user_id, key)
+);
+
+create index if not exists plan_domains_user_pos_idx
+  on public.plan_domains (user_id, position);
+
+alter table public.plan_domains enable row level security;
+
+drop policy if exists "own plan_domains all" on public.plan_domains;
+create policy "own plan_domains all" on public.plan_domains
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- ② items 의 계획 열 다섯. 전부 null 로 들어갑니다 —
+--    이 열이 생겨도 **기존 항목은 하나도 계획이 되지 않습니다.**
+alter table public.items add column if not exists horizon text;         -- short | mid | long
+alter table public.items add column if not exists plan_status text;     -- planned | doing | done | dropped
+alter table public.items add column if not exists domain text;          -- plan_domains.key
+alter table public.items add column if not exists related_ids jsonb not null default '[]'::jsonb;
+alter table public.items add column if not exists plan_status_at timestamptz;
+
+-- ③ 값 검사. 화면은 이미 정해진 값만 고르게 하지만, 백업 복원·SQL 편집은 화면을 안 거칩니다.
+--    오타 하나가 '격자 어디에도 안 보이는 계획' 이 되는 것을 막습니다.
+alter table public.items drop constraint if exists items_horizon_check;
+alter table public.items add constraint items_horizon_check
+  check (horizon is null or horizon in ('short', 'mid', 'long'));
+
+alter table public.items drop constraint if exists items_plan_status_check;
+alter table public.items add constraint items_plan_status_check
+  check (plan_status is null or plan_status in ('planned', 'doing', 'done', 'dropped'));
+
+-- ④ 계획 탭 조회용 부분 인덱스. 계획이 아닌 항목은 인덱스에 들어가지도 않습니다.
+create index if not exists items_user_plan_idx
+  on public.items (user_id, space, plan_status)
+  where plan_status is not null and deleted_at is null;
+
+-- ⑤ 기본 영역 6종 시드 — setup.sql 의 seed_defaults 안에 들어 있습니다.
+--    '그 사용자에게 이미 하나라도 있으면 통째로 건너뛰기' 라, 이름을 바꾼 뒤
+--    다시 실행해도 기본 이름이 되살아나지 않습니다.
+--    (수입 · 성장 · 건강 · 창작 · 관계 · 생활)
+```
+
+**실행 전에는** 앱이 `items.horizon` 을 한 번 물어보고 없으면 **계획 기능만 접습니다.**
+계획 탭이 사라지고, 항목 모달의 '계획으로' 칸과 카드의 `🧭 계획으로` 버튼도 숨습니다.
+그 대신 상단에 `계획 기능을 쓰려면 supabase/setup.sql 을 실행해 주세요` 한 줄이 뜹니다.
+**목록·검색·저장·오늘 탭·공유는 예전 그대로 돕니다** (공간 열에서 쓴 방법과 같습니다).
+
+`plan_status_at` 을 따로 둔 이유: `updated_at` 은 제목만 고쳐도 갱신되므로,
+그것으로 '7일째 멈춘 계획' 을 재면 오타 한 번 고친 것이 '움직인 것' 이 됩니다.
+주간 리뷰의 정체 목록이 조용히 비어 가는데 화면에는 아무 표시도 안 납니다.
+
+되돌리기 (계획을 통째로 버릴 때):
+
+```sql
+-- 🔴 계획으로 적어 둔 것이 전부 사라집니다. 백업 JSON 을 먼저 받아 두세요.
+alter table public.items drop constraint if exists items_horizon_check;
+alter table public.items drop constraint if exists items_plan_status_check;
+drop index if exists public.items_user_plan_idx;
+alter table public.items drop column if exists horizon;
+alter table public.items drop column if exists plan_status;
+alter table public.items drop column if exists domain;
+alter table public.items drop column if exists related_ids;
+alter table public.items drop column if exists plan_status_at;
+drop table if exists public.plan_domains;
+```
+
+---
+
 ### 그 밖
 
 **없습니다.**

@@ -13,6 +13,9 @@ export const store = {
   // 같은 요령으로 'space 열이 없다' 를 흉내 낸다. 공간 SQL 을 아직 실행하지 않은
   // DB 에서도 목록·저장이 예전 그대로 도는지 보려면 이쪽도 실패해야 한다.
   missingSpaceColumn: false,
+  // 계획 열(horizon·plan_status·domain·related_ids)과 plan_domains 표가 없는 DB.
+  // 계획 탭이 접히는지, 그래도 목록·저장이 예전 그대로 도는지를 여기서 본다.
+  missingPlanColumn: false,
   // items 에 쓰려고 하면 이 오류를 돌려준다. 로그인이 풀린 상태(RLS 거부)나
   // NUL 거부(22P05)처럼 '저장 자체가 튕기는' 경우를 흉내 낼 때 쓴다.
   // 오류 객체를 그대로 두면 모든 쓰기가 실패하고, 함수를 두면 (행) => 오류|null 로
@@ -35,10 +38,12 @@ export const store = {
 export function resetStore() {
   store.buckets = { 'archive-images': new Map(), 'archive-files': new Map() }
   store.rows = {
-    items: [], item_categories: [], categories: [], time_slots: [], shares: [], spaces: []
+    items: [], item_categories: [], categories: [], time_slots: [], shares: [], spaces: [],
+    plan_domains: []
   }
   store.missingFilesColumn = false
   store.missingSpaceColumn = false
+  store.missingPlanColumn = false
   store.itemsError = null
   store.uploadGuard = null
   store.anon = false
@@ -120,6 +125,20 @@ const MISSING_SPACES_TABLE = {
   message: "Could not find the table 'public.spaces' in the schema cache"
 }
 
+const MISSING_PLAN = {
+  code: '42703',
+  message: 'column items.horizon does not exist'
+}
+
+const MISSING_PLAN_TABLE = {
+  code: 'PGRST205',
+  message: "Could not find the table 'public.plan_domains' in the schema cache"
+}
+
+// 계획이 items 에 더한 열들. 이 중 하나라도 건드리면 '열이 없다' 로 답해야
+// 실제 PostgREST 와 같은 모양이 된다.
+const PLAN_COLUMNS = ['horizon', 'plan_status', 'domain', 'related_ids', 'plan_status_at']
+
 // setup.sql 의 default 중, 앱이 보내지 않아 DB 가 채우는 값들.
 const COLUMN_DEFAULTS = {
   shares: { revoked: false, files: [] }
@@ -144,6 +163,11 @@ function matches(row, filters) {
     if (kind === 'not' && a === 'is' && b === null) return row[col] != null
     if (kind === 'is' && a === null) return row[col] == null
     if (kind === 'in') return Array.isArray(a) && a.includes(row[col])
+    // '%말%' 을 대소문자 없이 견준다. PostgREST 의 ilike 에서 쓰는 와일드카드는 % 뿐이다.
+    if (kind === 'ilike') {
+      const needle = String(a ?? '').replace(/%/g, '').toLowerCase()
+      return String(row[col] ?? '').toLowerCase().includes(needle)
+    }
     return true
   })
 }
@@ -169,6 +193,10 @@ function makeQuery(table) {
     not(col, op, val) { q._filters.push(['not', col, op, val]); return q },
     is(col, val) { q._filters.push(['is', col, val]); return q },
     in(col, vals) { q._filters.push(['in', col, vals]); return q },
+    /* 🔴 ilike 는 **실제로 거른다.** or() 와 달리 이것은 재려는 대상이다 —
+       계획 모달의 '관련 항목 검색' 이 자기 자신과 이미 걸린 것을 빼고 내놓는지는
+       검색이 진짜로 좁혀져야만 볼 수 있다. */
+    ilike(col, pattern) { q._filters.push(['ilike', col, pattern]); return q },
     // Archive 의 검색이 쓰는 or(). 🔴 거르지는 않는다 — 이 가짜의 일은 '쿼리가 죽지 않게'
     //    하는 것이고, 검색 결과 자체는 여기서 재는 대상이 아니다.
     or() { return q },
@@ -206,6 +234,25 @@ function missingSpaceError(table, q) {
   return /(^|[\s,])space([\s,]|$)/.test(String(q._cols ?? '')) ? MISSING_SPACE : null
 }
 
+/* '계획 열이 없다' 를 실제 PostgREST 와 같은 모양으로 흉내 낸다 (위 missingSpaceError 와 같다).
+   🔴 select('*') 은 **실패시키지 않는다.** 진짜 DB 도 없는 열은 그냥 안 돌려줄 뿐이고,
+      여기서 실패시키면 계획 SQL 을 실행하지 않은 계정에서 목록이 통째로 깨진다 —
+      그러면 '접혔다' 가 아니라 '고장 났다' 를 재는 점검이 된다. */
+function missingPlanError(table, q) {
+  if (!store.missingPlanColumn) return null
+  if (table === 'plan_domains') return MISSING_PLAN_TABLE
+  if (table !== 'items') return null
+
+  if (q._op === 'insert' || q._op === 'update') {
+    const list = Array.isArray(q._payload) ? q._payload : [q._payload]
+    return list.some((r) => r && PLAN_COLUMNS.some((c) => c in r)) ? MISSING_PLAN : null
+  }
+  if (q._filters.some(([, col]) => PLAN_COLUMNS.includes(col))) return MISSING_PLAN
+  const cols = String(q._cols ?? '')
+  return PLAN_COLUMNS.some((c) => new RegExp(`(^|[\\s,])${c}([\\s,]|$)`).test(cols))
+    ? MISSING_PLAN : null
+}
+
 function run(table, q) {
   const rows = (store.rows[table] ??= [])
   store.calls.query.push({
@@ -214,6 +261,9 @@ function run(table, q) {
 
   const spaceErr = missingSpaceError(table, q)
   if (spaceErr) return { data: null, error: spaceErr }
+
+  const planErr = missingPlanError(table, q)
+  if (planErr) return { data: null, error: planErr }
 
   // 비로그인 상태. 실제 RLS 와 같은 모양으로 답한다 — 조회는 '오류 없이 0행',
   // 쓰기는 42501. 토큰을 알아도 shares 에서 한 줄도 못 읽는 것이 요점이다.
